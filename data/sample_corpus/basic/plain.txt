@@ -1,0 +1,3 @@
+Hello from the sample corpus.
+
+This file is plain UTF-8 text for Phase 2B ingestion tests.

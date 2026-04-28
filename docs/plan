@@ -1,0 +1,574 @@
+Fase 4A — Indexing foundations: embeddings interface + sparse/dense index metadata
+
+Pero la haría con cuidado para no meter dependencias pesadas todavía. Objetivo: preparar la arquitectura de indexado sin depender aún de modelos reales ni de Postgres activo para los tests unitarios.
+
+Actúa como tech lead senior de Python/FastAPI, arquitectura RAG, PostgreSQL/pgvector y diseño de pipelines de indexado reproducibles.
+
+Objetivo:
+Implementar la **Fase 4A — Indexing foundations** del repo `legal-rag-engine`.
+
+Esta fase debe preparar la base del indexado dense/sparse sin implementar todavía retrieval completo ni depender de modelos externos.
+
+Pipeline objetivo de esta fase:
+
+Persisted Document
+→ persisted Chunks
+→ embedding provider interface
+→ deterministic mock/local embedding provider para tests
+→ index manifest
+→ sparse document representation inicial
+→ indexing runner/CLI
+→ trazabilidad por ProcessingRun
+
+Contexto:
+`legal-rag-engine` es un motor RAG público, open-source, engine-first, local-first y con zero-cost baseline.
+
+Decisiones ya aceptadas:
+- PostgreSQL + pgvector será el backend vectorial default de v1.
+- Postgres FTS / sparse local será la rama sparse inicial.
+- Qdrant queda fuera de la baseline.
+- Smoke tests y unit tests no deben requerir Postgres.
+- No usar APIs externas.
+- No introducir LangChain/LlamaIndex.
+- No introducir OpenAI/Anthropic.
+- No introducir Qdrant.
+- No implementar todavía generation ni Streamlit real.
+
+Estado actual:
+Fase 1:
+- FastAPI mínima.
+- Configuración.
+- Logging.
+- Docker Compose con Postgres/pgvector.
+- `/health`.
+
+Fase 2A:
+- modelos de dominio;
+- modelos SQLAlchemy;
+- repositorios;
+- Alembic;
+- migraciones;
+- ProcessingRun;
+- tests unitarios sin DB.
+
+Fase 2B:
+- ingestion core;
+- loaders `.txt` y `.md`;
+- normalización conservadora;
+- checksums;
+- metadata básica;
+- `IngestionService`;
+- CLI de ingestión;
+- persistencia opcional;
+- idempotent skip.
+
+Fase 3:
+- chunking core;
+- estrategias `fixed_size` y `structure_aware`;
+- `ChunkingService`;
+- CLI de chunking;
+- persistencia opcional;
+- idempotencia por config hash;
+- lineage con `created_by_run_id`.
+
+Antes de modificar:
+1. Lee:
+   - `docs/product/prd.md`
+   - `docs/implementation/implementation-manual.md`
+   - `docs/architecture/system-overview.md`
+   - `docs/implementation/ingestion-notes.md`
+   - `docs/implementation/chunking-notes.md`
+   - `docs/implementation/persistence-notes.md`
+   - `docs/decisions/0001-local-first-zero-cost-stack.md`
+2. Inspecciona:
+   - `app/domain/models/`
+   - `app/ingestion/`
+   - `app/chunking/`
+   - `app/storage/postgres/`
+   - `tests/`
+   - `README.md`
+3. No rompas `/health`.
+4. No hagas que `pytest` requiera Postgres.
+5. No rompas las CLIs existentes.
+6. No introduzcas dependencias pesadas salvo que estén muy justificadas.
+
+Alcance de esta fase:
+1. Crear interfaces de embeddings.
+2. Crear un provider deterministic/mock para tests.
+3. Preparar modelo de `IndexManifest`.
+4. Añadir columnas/tabla mínima para estado de indexado si procede.
+5. Preparar migración para columna de embedding en chunks, si se puede hacer de forma segura.
+6. Preparar sparse representation inicial sin retrieval completo.
+7. Crear runner de indexado que procese chunks persistidos.
+8. Crear CLI mínima de indexado.
+9. Añadir tests unitarios sin DB.
+10. Añadir tests de integración DB opcionales.
+11. Actualizar documentación.
+
+Fuera de alcance:
+- No implementar retrieval todavía.
+- No implementar `/v1/ask`.
+- No implementar generation.
+- No implementar reranking.
+- No implementar Streamlit.
+- No llamar modelos externos.
+- No añadir OpenAI/Anthropic.
+- No añadir Qdrant.
+- No añadir LangChain/LlamaIndex.
+- No meter sentence-transformers todavía salvo que propongas explícitamente dejarlo para Fase 4B.
+- No obligar a descargar modelos en tests.
+
+## 1. Estructura de indexing
+
+Crear o actualizar:
+
+```text
+app/indexing/
+├─ __init__.py
+├─ errors.py
+├─ models.py
+├─ service.py
+├─ runner.py
+├─ cli.py
+├─ dense/
+│  ├─ __init__.py
+│  ├─ base.py
+│  └─ mock_provider.py
+├─ sparse/
+│  ├─ __init__.py
+│  ├─ tokenizer.py
+│  └─ document_terms.py
+└─ sync.py
+
+Respeta placeholders existentes.
+
+2. Embedding provider interface
+
+En app/indexing/dense/base.py, definir una interfaz explícita:
+
+class EmbeddingProvider(Protocol):
+    name: str
+    dimensions: int
+
+    def embed_texts(self, texts: Sequence[str]) -> list[list[float]]:
+        ...
+
+    def embed_query(self, text: str) -> list[float]:
+        ...
+
+Criterios:
+
+No depender de proveedores externos.
+No depender de sentence-transformers todavía.
+No hacer llamadas de red.
+Mantener la interfaz compatible con providers futuros.
+3. Deterministic mock embedding provider
+
+En app/indexing/dense/mock_provider.py, implementar DeterministicHashEmbeddingProvider.
+
+Objetivo:
+
+Permitir tests y smoke indexing sin modelos reales.
+Generar vectores deterministas a partir del texto.
+No representar calidad semántica real.
+Documentar claramente que es solo para tests/dev baseline.
+
+Características:
+
+name = "deterministic_hash"
+dimensions configurable, default pequeño, por ejemplo 16 o 32.
+El mismo texto debe producir el mismo vector.
+Textos distintos suelen producir vectores distintos.
+Vector normalizado de forma simple si es razonable.
+Sin dependencias externas.
+
+No presentar este provider como embedding real para producción.
+
+4. Modelos de indexing
+
+En app/indexing/models.py, definir modelos ligeros:
+
+IndexingConfig
+
+Campos sugeridos:
+
+embedding_provider: str
+embedding_dimensions: int
+chunking_strategy: str | None
+batch_size: int
+include_sparse: bool
+include_dense: bool
+force_reindex: bool
+
+Defaults:
+
+embedding_provider="deterministic_hash"
+embedding_dimensions=16
+batch_size=32
+include_sparse=True
+include_dense=True
+force_reindex=False
+
+Validaciones:
+
+batch_size > 0
+al menos uno de include_sparse o include_dense debe ser True
+embedding_dimensions > 0
+IndexManifest
+
+Campos sugeridos:
+
+id
+corpus_version
+chunking_strategy
+embedding_provider
+embedding_dimensions
+document_count
+chunk_count
+indexed_chunk_count
+include_sparse
+include_dense
+config_hash
+created_at
+metadata
+
+Puede ser dataclass o Pydantic model.
+
+IndexedChunkResult
+
+Campos sugeridos:
+
+chunk_id
+dense_indexed
+sparse_indexed
+error
+5. DB schema para indexing
+
+Revisar modelos actuales.
+
+Hay dos opciones razonables:
+
+Opción A — añadir columnas a chunks
+
+Añadir a chunks:
+
+embedding vector nullable
+embedding_provider string nullable
+embedding_dimensions int nullable
+embedding_indexed_at timestamptz nullable
+sparse_terms_json JSONB nullable
+sparse_indexed_at timestamptz nullable
+Opción B — crear tablas separadas
+
+Crear:
+
+chunk_embeddings
+chunk_sparse_terms
+index_manifests
+
+Recomendación para v1 simple:
+Usar Opción A si no complica SQLAlchemy/pgvector.
+Usar Opción B si la columna vector con dimensión dinámica complica demasiado.
+
+Importante:
+
+pgvector suele requerir dimensión definida en el tipo, por ejemplo vector(1536) o equivalente.
+Como esta fase usa deterministic_hash con dimensión pequeña, evita cerrar mal la arquitectura.
+Si hay riesgo de acoplar dimensión incorrecta, NO añadas todavía columna vector real.
+En ese caso, crea index_manifests y deja embedding storage real para Fase 4B.
+
+Decisión preferida:
+
+Crear tabla index_manifests.
+Añadir columnas de tracking no vectoriales a chunks si son útiles.
+Dejar columna vector real para Fase 4B cuando fijemos dimensión/modelo local real.
+
+Si decides no crear columna vector aún, documenta claramente:
+“Fase 4A validates provider interfaces and indexing orchestration; Fase 4B adds real pgvector storage.”
+
+6. Index manifest persistente
+
+Si creas tabla index_manifests, columnas sugeridas:
+
+id UUID primary key
+run_id UUID FK processing_runs.id nullable/on delete set null
+corpus_version string nullable
+chunking_strategy string nullable
+embedding_provider string not null
+embedding_dimensions int not null
+document_count int not null default 0
+chunk_count int not null default 0
+indexed_chunk_count int not null default 0
+include_sparse bool not null
+include_dense bool not null
+config_hash string not null
+metadata_json JSONB not null default {}
+created_at
+updated_at
+
+Añadir repositorio mínimo:
+
+class IndexManifestRepository:
+    add(...)
+    get_by_id(...)
+    list(...)
+    get_by_config_hash(...)
+
+No sobre-ingenierizar.
+
+7. Sparse representation inicial
+
+En app/indexing/sparse/tokenizer.py, implementar tokenizer simple:
+
+lowercase;
+extraer tokens alfanuméricos razonables;
+conservar términos con números cuando aplique;
+eliminar tokens vacíos;
+no añadir dependencias externas;
+no hacer stemming avanzado;
+no eliminar stopwords todavía, salvo que lo documentes.
+
+En app/indexing/sparse/document_terms.py, implementar:
+
+extract_sparse_terms(text: str) -> dict[str, int]
+
+Debe devolver frecuencias por término.
+
+Esto NO es retrieval todavía.
+Es solo representación sparse inicial/testable.
+
+8. Indexing service
+
+En app/indexing/service.py, crear IndexingService.
+
+Responsabilidad:
+
+recibir chunks de dominio o records convertidos;
+generar embeddings si include_dense=True;
+extraer sparse terms si include_sparse=True;
+devolver resultados estructurados;
+no requerir DB.
+
+Método sugerido:
+
+class IndexingService:
+    def __init__(self, embedding_provider: EmbeddingProvider):
+        ...
+
+    def index_chunks(
+        self,
+        chunks: Sequence[Chunk],
+        config: IndexingConfig,
+    ) -> list[IndexedChunkResult]:
+        ...
+
+Como todavía no hay vector storage real:
+
+Puede devolver embedding/sparse data en memoria dentro del result o metadata.
+O puede delegar persistencia al runner.
+Mantener separación limpia.
+
+Crear:
+
+def default_indexing_service() -> IndexingService:
+    ...
+
+con DeterministicHashEmbeddingProvider.
+
+9. Indexing runner persistente
+
+En app/indexing/runner.py, crear función de alto nivel:
+
+def index_chunks_persisted(
+    config: IndexingConfig,
+    session: Session,
+) -> IndexingRunResult:
+    ...
+
+Comportamiento:
+
+Crear ProcessingRun(run_type="indexing").
+Seleccionar chunks persistidos, opcionalmente filtrados por chunking_strategy.
+Crear o reutilizar IndexManifest por config_hash.
+Procesar chunks por batches.
+Persistir tracking del indexado según lo que permita el schema de Fase 4A.
+Marcar run completed/failed.
+Devolver resumen.
+
+Como no hay retrieval todavía:
+
+No implementar búsqueda.
+No implementar ranking.
+No implementar pgvector query.
+
+Idempotencia:
+
+Si existe manifest con mismo config_hash y no force_reindex, hacer skip o devolver manifest existente.
+Si force_reindex=True, crear nuevo run/manifest o actualizar según una decisión documentada.
+10. CLI de indexing
+
+Crear app/indexing/cli.py.
+
+Uso sugerido:
+
+python -m app.indexing.cli --chunking-strategy fixed_size --json
+python -m app.indexing.cli --chunking-strategy structure_aware --json
+python -m app.indexing.cli --include-sparse --include-dense --json
+
+Debe:
+
+requerir DB solo para modo persistente;
+fallar con mensaje claro si DB no está disponible;
+no afectar tests unitarios;
+no requerir modelos externos;
+usar deterministic provider por defecto.
+11. Config
+
+Actualizar app/core/config.py si procede:
+
+Añadir settings mínimos:
+
+embedding_provider
+embedding_model
+embedding_dimensions
+
+Si ya existen embedding_provider y embedding_model, no duplicar.
+
+Defaults compatibles:
+
+EMBEDDING_PROVIDER=local puede seguir en .env.example, pero para Fase 4A quizá mapear local a deterministic provider en dev/test.
+O usar EMBEDDING_PROVIDER=deterministic_hash hasta que Fase 4B añada local real.
+Elige una opción y documenta.
+
+No añadir Qdrant settings.
+
+12. Tests unitarios sin DB
+
+Crear tests:
+
+tests/unit/test_embedding_provider.py
+tests/unit/test_sparse_tokenizer.py
+tests/unit/test_indexing_models.py
+tests/unit/test_indexing_service.py
+
+Casos mínimos:
+
+Embedding provider
+Mismo texto produce mismo vector.
+Vector tiene dimensión esperada.
+Textos distintos producen vectores distintos.
+embed_query y embed_texts([text])[0] son coherentes.
+Sparse tokenizer
+Lowercase.
+Extrae tokens simples.
+Conserva términos con números.
+Frecuencias correctas.
+IndexingConfig
+Defaults válidos.
+Rechaza batch_size <= 0.
+Rechaza include_sparse=False e include_dense=False.
+Rechaza dimensions <= 0.
+IndexingService
+Indexa chunks con dense + sparse.
+Puede indexar solo dense.
+Puede indexar solo sparse.
+Devuelve errores controlados si chunk vacío.
+No requiere DB.
+
+No requerir Postgres.
+No requerir Docker.
+No requerir APIs externas.
+No descargar modelos.
+
+13. Tests de integración DB opcionales
+
+Crear si el schema lo permite:
+
+tests/integration/test_indexing_persist.py
+
+Debe estar gated con:
+
+pytest.mark.integration
+LEGAL_RAG_RUN_INTEGRATION_DB=1
+
+Validar:
+
+Ingestar documento.
+Chunkear documento.
+Ejecutar indexing persisted.
+Crear manifest.
+Re-ejecutar y comprobar idempotent skip.
+
+No debe correr por defecto.
+
+14. Documentación
+
+Crear:
+
+docs/implementation/indexing-notes.md
+
+Debe explicar:
+
+objetivo de Fase 4A;
+diferencia entre indexing foundation y retrieval;
+provider deterministic hash;
+por qué no es embedding semántico real;
+sparse terms inicial;
+manifest;
+qué queda para Fase 4B:
+local real embeddings;
+pgvector storage;
+vector indexes;
+Postgres FTS materializado si aplica;
+qué queda para Fase 5:
+retrieval dense/sparse/hybrid;
+RRF;
+ranking.
+
+Actualizar:
+
+README.md
+docs/README.md
+docs/implementation/implementation-manual.md solo con nota breve si procede.
+15. Calidad
+
+Ejecutar:
+
+pytest
+ruff check app tests
+mypy app
+
+La expectativa:
+
+tests pasan sin Postgres;
+integración DB skip por defecto;
+lint limpio;
+mypy limpio.
+16. Respuesta final esperada
+
+Al terminar, devuelve:
+
+Resumen de cambios.
+Ficheros creados/modificados.
+Migraciones creadas, si las hay.
+Tests añadidos.
+Comandos ejecutados y resultado.
+Decisiones tomadas, especialmente sobre si se añadió o no columna vector real.
+Qué queda para Fase 4B.
+Limitaciones conocidas.
+
+Criterios de aceptación:
+
+pytest pasa sin Postgres.
+/health sigue intacto.
+Existe EmbeddingProvider interface.
+Existe deterministic/mock embedding provider.
+Existe sparse tokenizer / sparse terms extractor.
+Existe IndexingConfig.
+Existe IndexManifest o decisión documentada equivalente.
+Existe runner/CLI de indexing si hay DB.
+No hay retrieval todavía.
+No hay generation todavía.
+No se introduce Qdrant.
+No se introducen proveedores externos.
+No se requiere Docker para tests unitarios.
