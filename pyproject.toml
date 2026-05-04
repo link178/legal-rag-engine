@@ -13,6 +13,7 @@ authors = [{ name = "Legal RAG Engine contributors" }]
 dependencies = [
     "alembic>=1.14",
     "fastapi>=0.115",
+    "pgvector>=0.3",
     "psycopg[binary]>=3.2",
     "pydantic-settings>=2.6",
     "python-dotenv>=1.0",
@@ -21,6 +22,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+local-embeddings = [
+    "sentence-transformers>=3.0",
+]
 dev = [
     "pytest>=8.0",
     "httpx>=0.27",

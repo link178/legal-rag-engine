@@ -34,8 +34,11 @@ class Settings(BaseSettings):
         validation_alias="DATABASE_URL",
     )
 
-    embedding_provider: str = Field(default="local", validation_alias="EMBEDDING_PROVIDER")
+    embedding_provider: str = Field(
+        default="deterministic_hash", validation_alias="EMBEDDING_PROVIDER"
+    )
     embedding_model: str = Field(default="", validation_alias="EMBEDDING_MODEL")
+    embedding_dimensions: int = Field(default=16, validation_alias="EMBEDDING_DIMENSIONS")
     generation_provider: str = Field(default="mock", validation_alias="GENERATION_PROVIDER")
     local_llm_model: str = Field(default="", validation_alias="LOCAL_LLM_MODEL")
 

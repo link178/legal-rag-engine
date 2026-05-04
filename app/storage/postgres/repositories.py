@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.domain.models import Chunk, Document, ProcessingRun
 from app.storage.postgres.models import (
+    ChunkEmbeddingRecord,
     ChunkRecord,
     DocumentRecord,
     IndexManifestChunkRecord,
@@ -321,6 +322,101 @@ class IndexManifestRepository:
         )
         return self._session.scalars(stmt).first()
 
+    def get_by_id(self, manifest_id: UUID) -> IndexManifestRecord | None:
+        return self._session.get(IndexManifestRecord, manifest_id)
+
+    def get_latest_completed(
+        self,
+        *,
+        embedding_provider: str | None = None,
+        embedding_model: str | None = None,
+        embedding_dimensions: int | None = None,
+        chunking_strategy: str | None = None,
+    ) -> IndexManifestRecord | None:
+        """Latest manifest with ``embeddings_persisted`` (dense vectors ready), optional filters."""
+        stmt = select(IndexManifestRecord).where(IndexManifestRecord.embeddings_persisted.is_(True))
+        stmt = self._apply_manifest_family_filters(
+            stmt,
+            embedding_provider=embedding_provider,
+            embedding_model=embedding_model,
+            embedding_dimensions=embedding_dimensions,
+            chunking_strategy=chunking_strategy,
+        )
+        stmt = stmt.order_by(IndexManifestRecord.created_at.desc()).limit(1)
+        return self._session.scalars(stmt).first()
+
+    def get_latest_with_sparse(
+        self,
+        *,
+        embedding_provider: str | None = None,
+        embedding_model: str | None = None,
+        embedding_dimensions: int | None = None,
+        chunking_strategy: str | None = None,
+    ) -> IndexManifestRecord | None:
+        """Latest manifest that included sparse indexing (for sparse-only retrieval)."""
+        stmt = select(IndexManifestRecord).where(IndexManifestRecord.include_sparse.is_(True))
+        stmt = self._apply_manifest_family_filters(
+            stmt,
+            embedding_provider=embedding_provider,
+            embedding_model=embedding_model,
+            embedding_dimensions=embedding_dimensions,
+            chunking_strategy=chunking_strategy,
+        )
+        stmt = stmt.order_by(IndexManifestRecord.created_at.desc()).limit(1)
+        return self._session.scalars(stmt).first()
+
+    @staticmethod
+    def _apply_manifest_family_filters(
+        stmt,
+        *,
+        embedding_provider: str | None,
+        embedding_model: str | None,
+        embedding_dimensions: int | None,
+        chunking_strategy: str | None,
+    ):
+        if embedding_provider is not None:
+            stmt = stmt.where(
+                IndexManifestRecord.embedding_provider == embedding_provider.strip()
+            )
+        if embedding_model is not None:
+            stmt = stmt.where(IndexManifestRecord.embedding_model == embedding_model)
+        if embedding_dimensions is not None:
+            stmt = stmt.where(
+                IndexManifestRecord.embedding_dimensions == embedding_dimensions
+            )
+        if chunking_strategy is not None:
+            stmt = stmt.where(IndexManifestRecord.chunking_strategy == chunking_strategy)
+        return stmt
+
+    def list_sparse_chunk_rows(
+        self, manifest_id: UUID
+    ) -> list[tuple[ChunkRecord, DocumentRecord, dict[str, int]]]:
+        """Chunks with ``sparse_indexed`` and non-null term JSON for this manifest."""
+        stmt = (
+            select(ChunkRecord, DocumentRecord, IndexManifestChunkRecord.sparse_terms_json)
+            .join(IndexManifestChunkRecord, IndexManifestChunkRecord.chunk_id == ChunkRecord.id)
+            .join(DocumentRecord, DocumentRecord.id == ChunkRecord.document_id)
+            .where(
+                IndexManifestChunkRecord.manifest_id == manifest_id,
+                IndexManifestChunkRecord.sparse_indexed.is_(True),
+                IndexManifestChunkRecord.sparse_terms_json.isnot(None),
+            )
+        )
+        out: list[tuple[ChunkRecord, DocumentRecord, dict[str, int]]] = []
+        for chunk_row, doc_row, raw_terms in self._session.execute(stmt).all():
+            if not isinstance(raw_terms, dict):
+                continue
+            terms: dict[str, int] = {}
+            for k, v in raw_terms.items():
+                try:
+                    iv = int(v)
+                except (TypeError, ValueError):
+                    continue
+                if iv > 0:
+                    terms[str(k)] = iv
+            out.append((chunk_row, doc_row, terms))
+        return out
+
     def add_manifest_row(
         self,
         *,
@@ -338,6 +434,8 @@ class IndexManifestRepository:
         chunk_set_hash: str,
         manifest_hash: str,
         metadata_json: dict,
+        embedding_model: str | None = None,
+        embeddings_persisted: bool = False,
     ) -> IndexManifestRecord:
         now = _utc_now()
         row = IndexManifestRecord(
@@ -347,6 +445,8 @@ class IndexManifestRepository:
             chunking_strategy=chunking_strategy,
             embedding_provider=embedding_provider,
             embedding_dimensions=embedding_dimensions,
+            embedding_model=embedding_model,
+            embeddings_persisted=embeddings_persisted,
             document_count=document_count,
             chunk_count=chunk_count,
             indexed_chunk_count=indexed_chunk_count,
@@ -387,3 +487,88 @@ class IndexManifestRepository:
                 updated_at=now,
             )
         )
+
+
+class ChunkEmbeddingRepository:
+    """Persistence for ``chunk_embeddings`` (Phase 4B dense vectors)."""
+
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def add(
+        self,
+        *,
+        chunk_id: UUID,
+        index_manifest_id: UUID,
+        embedding_provider: str,
+        embedding_model: str | None,
+        embedding_dimensions: int,
+        embedding: list[float],
+        text_checksum: str,
+        metadata_json: dict | None = None,
+    ) -> ChunkEmbeddingRecord:
+        now = _utc_now()
+        row = ChunkEmbeddingRecord(
+            id=uuid.uuid4(),
+            chunk_id=chunk_id,
+            index_manifest_id=index_manifest_id,
+            embedding_provider=embedding_provider,
+            embedding_model=embedding_model,
+            embedding_dimensions=embedding_dimensions,
+            embedding=embedding,
+            text_checksum=text_checksum,
+            metadata_json=dict(metadata_json or {}),
+            created_at=now,
+            updated_at=now,
+        )
+        self._session.add(row)
+        self._session.flush()
+        return row
+
+    def get_by_chunk_and_manifest(
+        self, chunk_id: UUID, index_manifest_id: UUID
+    ) -> ChunkEmbeddingRecord | None:
+        stmt = (
+            select(ChunkEmbeddingRecord)
+            .where(
+                ChunkEmbeddingRecord.chunk_id == chunk_id,
+                ChunkEmbeddingRecord.index_manifest_id == index_manifest_id,
+            )
+            .limit(1)
+        )
+        return self._session.scalars(stmt).first()
+
+    def list_by_manifest(self, index_manifest_id: UUID) -> list[ChunkEmbeddingRecord]:
+        stmt = select(ChunkEmbeddingRecord).where(
+            ChunkEmbeddingRecord.index_manifest_id == index_manifest_id
+        )
+        return list(self._session.scalars(stmt).all())
+
+    def count_by_manifest(self, index_manifest_id: UUID) -> int:
+        stmt = select(func.count(ChunkEmbeddingRecord.id)).where(
+            ChunkEmbeddingRecord.index_manifest_id == index_manifest_id
+        )
+        return int(self._session.scalar(stmt) or 0)
+
+    def exists_for_manifest(self, index_manifest_id: UUID) -> bool:
+        return self.count_by_manifest(index_manifest_id) > 0
+
+    def find_similar(
+        self,
+        *,
+        index_manifest_id: UUID,
+        query_vector: list[float],
+        limit: int,
+    ) -> list[tuple[ChunkRecord, DocumentRecord, float]]:
+        """Top-``limit`` chunks by embedding L2 distance (pgvector ``<->``), ascending."""
+        dist_expr = ChunkEmbeddingRecord.embedding.l2_distance(query_vector)
+        stmt = (
+            select(ChunkRecord, DocumentRecord, dist_expr.label("distance"))
+            .join(ChunkEmbeddingRecord, ChunkEmbeddingRecord.chunk_id == ChunkRecord.id)
+            .join(DocumentRecord, DocumentRecord.id == ChunkRecord.document_id)
+            .where(ChunkEmbeddingRecord.index_manifest_id == index_manifest_id)
+            .order_by(dist_expr.asc(), ChunkRecord.id.asc())
+            .limit(limit)
+        )
+        rows = self._session.execute(stmt).all()
+        return [(r[0], r[1], float(r[2])) for r in rows]

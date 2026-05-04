@@ -14,7 +14,7 @@ from app.indexing.runner import index_chunks_persisted
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=(
-            "Index persisted chunks under an index manifest (Phase 4A). "
+            "Index persisted chunks under an index manifest (Phase 4B: pgvector storage optional). "
             "Requires DATABASE_URL and alembic upgrade head."
         ),
     )
@@ -28,10 +28,21 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--embedding-provider",
         type=str,
-        default="deterministic_hash",
-        help="Phase 4A supports deterministic_hash only",
+        default=None,
+        help="dense provider: deterministic_hash | local_sentence_transformers (default from env)",
     )
-    parser.add_argument("--embedding-dimensions", type=int, default=16)
+    parser.add_argument(
+        "--embedding-dimensions",
+        type=int,
+        default=None,
+        help="vector length (must match provider output; default from EMBEDDING_DIMENSIONS)",
+    )
+    parser.add_argument(
+        "--embedding-model",
+        type=str,
+        default=None,
+        help="HF model id for local_sentence_transformers (default from EMBEDDING_MODEL)",
+    )
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument(
         "--no-dense",
@@ -68,9 +79,26 @@ def main(argv: list[str] | None = None) -> int:
 
     strat = (args.chunking_strategy or "").strip() or None
 
+    settings = get_settings()
+    provider = (
+        args.embedding_provider
+        if args.embedding_provider is not None
+        else settings.embedding_provider
+    )
+    dims = (
+        args.embedding_dimensions
+        if args.embedding_dimensions is not None
+        else settings.embedding_dimensions
+    )
+    raw_model = (
+        args.embedding_model if args.embedding_model is not None else settings.embedding_model
+    )
+    model_norm = (raw_model or "").strip() or None
+
     cfg = IndexingConfig(
-        embedding_provider=args.embedding_provider,
-        embedding_dimensions=args.embedding_dimensions,
+        embedding_provider=provider,
+        embedding_dimensions=dims,
+        embedding_model=model_norm,
         chunking_strategy=strat,
         batch_size=args.batch_size,
         include_dense=not args.no_dense,
@@ -78,7 +106,6 @@ def main(argv: list[str] | None = None) -> int:
         force_reindex=args.force_reindex,
     )
 
-    settings = get_settings()
     res = index_chunks_persisted(
         cfg,
         database_url=settings.database_url,
@@ -99,6 +126,9 @@ def main(argv: list[str] | None = None) -> int:
         "run_id": rid,
         "run_status": res.run.status if res.run else None,
         "skipped_existing": res.skipped_existing,
+        "embedding_provider": res.manifest.embedding_provider if res.manifest else None,
+        "embedding_model": res.manifest.embedding_model if res.manifest else None,
+        "embeddings_persisted": res.manifest.embeddings_persisted if res.manifest else None,
         "indexed_chunks": len(res.chunk_results),
         "indexed_chunk_success_count": (
             sum(1 for x in res.chunk_results if x.error is None)

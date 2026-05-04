@@ -208,7 +208,13 @@ Baseline fixed-size + Markdown structure-aware implementations live under `app/c
 
 ## 9. Embeddings e indexado dense
 
-**Implementado en Phase 4A del repo público:** interfaz `EmbeddingProvider`, proveedor determinista para tests (`DeterministicHashEmbeddingProvider`), sparse term-frequency inicial, tablas `index_manifests`/`index_manifest_chunks`, CLI `python -m app.indexing.cli`. Phase 4A **no** persiste vectores en `chunks` ni índices pgvector; ver [`indexing-notes.md`](indexing-notes.md).
+**Implemented through Phase 4B of the repo público:** interfaz `EmbeddingProvider`, proveedor determinista, proveedor opcional `local_sentence_transformers`, sparse term-frequency inicial, tablas `index_manifests`/`index_manifest_chunks`, tabla **`chunk_embeddings`** (pgvector), CLI `python -m app.indexing.cli`. Índices ANN sobre vectores y FTS en Postgres siguen como trabajo opcional; ver [`indexing-notes.md`](indexing-notes.md).
+
+**Phase 5 (retrieval)** añade consulta de similaridad denso (L2 pgvector), sparse léxico baseline sobre `sparse_terms_json`, modo híbrido con RRF y CLI `python -m app.retrieval.cli`; ver [`retrieval-notes.md`](retrieval-notes.md).
+
+**Phase 5.5 (evaluación retrieval-only baseline):** dataset golden en JSONL, métricas Hit@k / MRR, informes JSON y Markdown opcional, CLI `python -m app.evaluation.cli`; lectura únicamente (sin nuevas filas `processing_runs` para eval). Ver [`evaluation-notes.md`](evaluation-notes.md).
+
+**Phase 6 (generation mock wired):** `ContextBuilder`, `build_grounded_prompt`, protocolo `GenerationProvider` (`generate(prompt: str) -> str`), `MockGenerationProvider`, `GroundedAnswerer.from_session`, CLI `python -m app.generation.cli`; lectura únicamente PostgreSQL (**sin nuevas filas `processing_runs`**). Ver [`generation-notes.md`](generation-notes.md).
 
 Provider interface:
 
@@ -281,32 +287,26 @@ class Reranker(Protocol):
 
 Si no está disponible, el sistema debe seguir funcionando.
 
-## 13. Grounded generation
+## 13. Grounded generation (Phase 6 shipped)
 
-Context builder:
+Implementado como capa engine-only (sin endpoints FastAPI todavía). Flujo:
+
+1. `GroundedAnswerer.from_session(session, RetrievalConfig(...))`: resuelve el mismo manifest que retrieval y ejecuta `RetrievalOrchestrator.retrieve`.
+2. `ContextBuilder` convierte ``RetrievedChunk`` rankeados en `GroundedContextBlock` (ids citables desde 1, truncado determinista).
+3. `build_grounded_prompt(question, blocks, insufficient_sentence=...)` genera una sola cadena lista para enviar al proveedor.
+4. ``GenerationProvider.generate(prompt: str) -> str`` produce la respuesta en bruto (`MockGenerationProvider` en esta fase).
+5. `extract_cited_ids(answer_text)` encuentra refs `[123]` únicamente dígitos; modo `grounded` si algún id válido aparece contra los bloques, `partial` si no hay cruce, `insufficient_context` cuando no hay contexto utilizable después del builder o cuando la respuesta igual al fallback estandarizado (`INSUFFICIENT_CONTEXT_SENTENCE`).
+
+Formato de contexto determinista (cabeceras de una línea + cuerpo de texto):
 
 ```text
-[1] Source: docs/a.md | Heading: ... | Chunk: ...
-<chunk text>
-
-[2] Source: docs/b.md | Heading: ... | Chunk: ...
-<chunk text>
+[N] source: docs/a.md | title: Intro | heading: Overview
+<texto del fragmento truncado opcionalmente con … >
 ```
 
-Generator provider interface:
+Cabeceras con metadatos faltantes usan marcador Unicode `—` para mantener el parseo estable.
 
-```python
-class GenerationProvider(Protocol):
-    def generate(self, question: str, context: str) -> GeneratedAnswer: ...
-```
-
-Providers v1:
-
-- `MockGenerationProvider` para tests y smoke tests.
-- `LocalGenerationProvider` opcional para Ollama u otro LLM local.
-- Providers externos opcionales solo como adapters.
-
-El prompt debe exigir responder solo con el contexto dado, citar chunks por número, declarar falta de contexto y no inventar fuentes.
+Los proveedores v1 efectivos aquí solo incluyen **`MockGenerationProvider`**; proveedores locales/cloud son extensiones opcionales futuras. `verify_citations` sigue `NotImplementedError` hasta citation verification avanzado (§14 siguiente).
 
 ## 14. Citation verification e insufficient context fallback
 

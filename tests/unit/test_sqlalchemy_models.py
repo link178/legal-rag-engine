@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 from app.storage.postgres.models import (
+    ChunkEmbeddingRecord,
     ChunkRecord,
     DocumentRecord,
     IndexManifestChunkRecord,
     IndexManifestRecord,
     ProcessingRunRecord,
 )
+from pgvector.sqlalchemy import Vector
 from sqlalchemy.orm import Mapper
 
 
@@ -19,6 +21,7 @@ def test_metadata_tables_exist() -> None:
         ChunkRecord.__table__.name,
         IndexManifestRecord.__table__.name,
         IndexManifestChunkRecord.__table__.name,
+        ChunkEmbeddingRecord.__table__.name,
     }
     assert tables == {
         "processing_runs",
@@ -26,6 +29,7 @@ def test_metadata_tables_exist() -> None:
         "chunks",
         "index_manifests",
         "index_manifest_chunks",
+        "chunk_embeddings",
     }
 
 
@@ -82,6 +86,8 @@ def test_index_manifests_columns() -> None:
         "chunking_strategy",
         "embedding_provider",
         "embedding_dimensions",
+        "embedding_model",
+        "embeddings_persisted",
         "document_count",
         "chunk_count",
         "indexed_chunk_count",
@@ -106,6 +112,31 @@ def test_index_manifest_chunks_fk() -> None:
     assert fk_tables == {"chunks", "index_manifests"}
 
 
+def test_chunk_embeddings_columns_and_fk() -> None:
+    cols = {c.key for c in ChunkEmbeddingRecord.__table__.columns}
+    assert cols == {
+        "id",
+        "chunk_id",
+        "index_manifest_id",
+        "embedding_provider",
+        "embedding_model",
+        "embedding_dimensions",
+        "embedding",
+        "text_checksum",
+        "metadata_json",
+        "created_at",
+        "updated_at",
+    }
+    emb_col = ChunkEmbeddingRecord.__table__.c.embedding
+    assert isinstance(emb_col.type, Vector)
+    fks = list(ChunkEmbeddingRecord.__table__.foreign_keys)
+    fk_tables = {fk.column.table.name for fk in fks}
+    assert fk_tables == {"chunks", "index_manifests"}
+    constraint_names = {c.name for c in ChunkEmbeddingRecord.__table__.constraints}
+    assert "uq_chunk_embeddings_chunk_manifest" in constraint_names
+
+
+def test_processing_runs_columns() -> None:
     cols = {c.key for c in ProcessingRunRecord.__table__.columns}
     assert "run_type" in cols
     assert "status" in cols

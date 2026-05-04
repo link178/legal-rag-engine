@@ -1,574 +1,629 @@
-Fase 4A — Indexing foundations: embeddings interface + sparse/dense index metadata
 
-Pero la haría con cuidado para no meter dependencias pesadas todavía. Objetivo: preparar la arquitectura de indexado sin depender aún de modelos reales ni de Postgres activo para los tests unitarios.
+Actúa como senior backend/RAG engineer especializado en grounded generation, context building, citas auditables y sistemas RAG reproducibles.
 
-Actúa como tech lead senior de Python/FastAPI, arquitectura RAG, PostgreSQL/pgvector y diseño de pipelines de indexado reproducibles.
+Estamos trabajando en el repo `legal-rag-engine`.
 
-Objetivo:
-Implementar la **Fase 4A — Indexing foundations** del repo `legal-rag-engine`.
+## Contexto actual
 
-Esta fase debe preparar la base del indexado dense/sparse sin implementar todavía retrieval completo ni depender de modelos externos.
+El proyecto `legal-rag-engine` es un motor RAG público, open-source, local-first, engine-first y orientado a portfolio técnico.
 
-Pipeline objetivo de esta fase:
+No estamos construyendo todavía:
 
-Persisted Document
-→ persisted Chunks
-→ embedding provider interface
-→ deterministic mock/local embedding provider para tests
-→ index manifest
-→ sparse document representation inicial
-→ indexing runner/CLI
-→ trazabilidad por ProcessingRun
+- SaaS;
+- producto AI Act/compliance end-to-end;
+- dashboard enterprise;
+- sistema multi-tenant;
+- billing/auth/SSO;
+- plataforma comercial.
 
-Contexto:
-`legal-rag-engine` es un motor RAG público, open-source, engine-first, local-first y con zero-cost baseline.
+El objetivo es construir un engine RAG serio y reusable con arquitectura limpia, trazabilidad, evaluación y baseline zero-cost.
 
-Decisiones ya aceptadas:
-- PostgreSQL + pgvector será el backend vectorial default de v1.
-- Postgres FTS / sparse local será la rama sparse inicial.
-- Qdrant queda fuera de la baseline.
-- Smoke tests y unit tests no deben requerir Postgres.
-- No usar APIs externas.
-- No introducir LangChain/LlamaIndex.
-- No introducir OpenAI/Anthropic.
-- No introducir Qdrant.
-- No implementar todavía generation ni Streamlit real.
+## Estado implementado
 
-Estado actual:
-Fase 1:
-- FastAPI mínima.
-- Configuración.
-- Logging.
-- Docker Compose con Postgres/pgvector.
-- `/health`.
-
-Fase 2A:
-- modelos de dominio;
-- modelos SQLAlchemy;
-- repositorios;
-- Alembic;
-- migraciones;
-- ProcessingRun;
-- tests unitarios sin DB.
-
-Fase 2B:
-- ingestion core;
-- loaders `.txt` y `.md`;
-- normalización conservadora;
-- checksums;
-- metadata básica;
-- `IngestionService`;
-- CLI de ingestión;
-- persistencia opcional;
-- idempotent skip.
-
-Fase 3:
-- chunking core;
-- estrategias `fixed_size` y `structure_aware`;
-- `ChunkingService`;
-- CLI de chunking;
-- persistencia opcional;
-- idempotencia por config hash;
-- lineage con `created_by_run_id`.
-
-Antes de modificar:
-1. Lee:
-   - `docs/product/prd.md`
-   - `docs/implementation/implementation-manual.md`
-   - `docs/architecture/system-overview.md`
-   - `docs/implementation/ingestion-notes.md`
-   - `docs/implementation/chunking-notes.md`
-   - `docs/implementation/persistence-notes.md`
-   - `docs/decisions/0001-local-first-zero-cost-stack.md`
-2. Inspecciona:
-   - `app/domain/models/`
-   - `app/ingestion/`
-   - `app/chunking/`
-   - `app/storage/postgres/`
-   - `tests/`
-   - `README.md`
-3. No rompas `/health`.
-4. No hagas que `pytest` requiera Postgres.
-5. No rompas las CLIs existentes.
-6. No introduzcas dependencias pesadas salvo que estén muy justificadas.
-
-Alcance de esta fase:
-1. Crear interfaces de embeddings.
-2. Crear un provider deterministic/mock para tests.
-3. Preparar modelo de `IndexManifest`.
-4. Añadir columnas/tabla mínima para estado de indexado si procede.
-5. Preparar migración para columna de embedding en chunks, si se puede hacer de forma segura.
-6. Preparar sparse representation inicial sin retrieval completo.
-7. Crear runner de indexado que procese chunks persistidos.
-8. Crear CLI mínima de indexado.
-9. Añadir tests unitarios sin DB.
-10. Añadir tests de integración DB opcionales.
-11. Actualizar documentación.
-
-Fuera de alcance:
-- No implementar retrieval todavía.
-- No implementar `/v1/ask`.
-- No implementar generation.
-- No implementar reranking.
-- No implementar Streamlit.
-- No llamar modelos externos.
-- No añadir OpenAI/Anthropic.
-- No añadir Qdrant.
-- No añadir LangChain/LlamaIndex.
-- No meter sentence-transformers todavía salvo que propongas explícitamente dejarlo para Fase 4B.
-- No obligar a descargar modelos en tests.
-
-## 1. Estructura de indexing
-
-Crear o actualizar:
+El pipeline actual ya soporta:
 
 ```text
-app/indexing/
+archivo .txt/.md
+→ ingestión
+→ normalización
+→ Document
+→ chunking fixed_size / structure_aware
+→ Chunk
+→ indexing dense/sparse
+→ manifests
+→ chunk_embeddings / sparse rows
+→ dense retrieval
+→ sparse retrieval
+→ hybrid retrieval
+→ RRF
+→ RetrievedChunk[]
+→ retrieval-only evaluation
+→ Hit@k / MRR
+→ JSON/Markdown report
+
+Fases cerradas:
+
+Fase 1: bootstrap FastAPI, config, logging, healthcheck, tooling.
+Fase 2A: dominio + persistencia base con SQLAlchemy/Alembic.
+Fase 2B: ingestión .txt / .md, normalización, checksums, CLI.
+Fase 3: chunking fixed_size y structure_aware, CLI, lineage por ProcessingRun.
+Fase 4A: indexing foundations, deterministic hash embeddings, sparse tokenizer, manifests.
+Fase 4B: embeddings persistidos en chunk_embeddings con pgvector, provider local opcional sentence-transformers.
+Fase 5: retrieval dense/sparse/hybrid + RRF.
+Fase 5.5: retrieval evaluation baseline con golden questions, Hit@k y MRR.
+
+QA actual reportado:
+
+pytest: 146 passed, 6 skipped
+ruff check app tests: clean
+mypy app: clean
+Objetivo de esta fase
+
+Implementar la primera capa de generación grounded del motor.
+
+Objetivo conceptual:
+
+query
+→ RetrievalOrchestrator
+→ RetrievedChunk[]
+→ ContextBuilder
+→ grounded prompt
+→ GenerationProvider
+→ structured answer
+→ citations [1], [2]
+→ insufficient_context cuando no haya evidencia suficiente
+
+Esta fase debe transformar chunks recuperados en una respuesta estructurada y auditable.
+
+Debe mantener la filosofía del proyecto:
+
+local-first;
+zero-cost baseline;
+sin LLM obligatorio;
+sin API keys obligatorias;
+deterministic/mock provider para tests;
+integración futura con LLM real como extensión opcional, no requisito;
+tests unitarios rápidos sin DB;
+integration tests solo opt-in si se añaden;
+separación limpia entre retrieval, context building, generation y citation verification futura.
+Scope
+
+Crear módulo:
+
+app/generation/
 ├─ __init__.py
-├─ errors.py
 ├─ models.py
-├─ service.py
-├─ runner.py
+├─ context.py
+├─ prompts.py
+├─ answerer.py
 ├─ cli.py
-├─ dense/
-│  ├─ __init__.py
-│  ├─ base.py
-│  └─ mock_provider.py
-├─ sparse/
-│  ├─ __init__.py
-│  ├─ tokenizer.py
-│  └─ document_terms.py
-└─ sync.py
+└─ providers/
+   ├─ __init__.py
+   ├─ base.py
+   └─ mock.py
 
-Respeta placeholders existentes.
+Añadir tests:
 
-2. Embedding provider interface
+tests/unit/generation/
+├─ test_generation_models.py
+├─ test_context_builder.py
+├─ test_prompts.py
+├─ test_mock_provider.py
+└─ test_answerer.py
 
-En app/indexing/dense/base.py, definir una interfaz explícita:
+Opcional si encaja sin fragilidad:
 
-class EmbeddingProvider(Protocol):
-    name: str
-    dimensions: int
+tests/integration/test_generation_persist.py
 
-    def embed_texts(self, texts: Sequence[str]) -> list[list[float]]:
-        ...
+Actualizar documentación:
 
-    def embed_query(self, text: str) -> list[float]:
-        ...
+docs/implementation/generation-notes.md
+docs/implementation/implementation-manual.md
+docs/README.md
+README.md
 
-Criterios:
+No modificar endpoints FastAPI todavía salvo que exista alguna necesidad mínima de import. No implementar /v1/ask en esta fase.
 
-No depender de proveedores externos.
-No depender de sentence-transformers todavía.
-No hacer llamadas de red.
-Mantener la interfaz compatible con providers futuros.
-3. Deterministic mock embedding provider
+Requisitos funcionales
+1. Modelos de generación
 
-En app/indexing/dense/mock_provider.py, implementar DeterministicHashEmbeddingProvider.
+Crear app/generation/models.py.
 
-Objetivo:
+Definir modelos claros y serializables.
 
-Permitir tests y smoke indexing sin modelos reales.
-Generar vectores deterministas a partir del texto.
-No representar calidad semántica real.
-Documentar claramente que es solo para tests/dev baseline.
+Mínimos recomendados:
 
-Características:
+AnswerMode
 
-name = "deterministic_hash"
-dimensions configurable, default pequeño, por ejemplo 16 o 32.
-El mismo texto debe producir el mismo vector.
-Textos distintos suelen producir vectores distintos.
-Vector normalizado de forma simple si es razonable.
-Sin dependencias externas.
+Valores:
 
-No presentar este provider como embedding real para producción.
+grounded
+partial
+insufficient_context
+GroundedCitation
 
-4. Modelos de indexing
+Campos recomendados:
 
-En app/indexing/models.py, definir modelos ligeros:
+citation_id: int
+chunk_id: UUID
+document_id: UUID | None
+source_path: str | None
+title: str | None
+score: float | None
+rank: int | None
+text_preview: str
+GroundedContextBlock
 
-IndexingConfig
+Campos recomendados:
 
-Campos sugeridos:
+citation_id: int
+chunk_id: UUID
+document_id: UUID | None
+source_path: str | None
+title: str | None
+rank: int
+score: float | None
+text: str
+GroundedAnswer
 
-embedding_provider: str
-embedding_dimensions: int
-chunking_strategy: str | None
-batch_size: int
-include_sparse: bool
-include_dense: bool
-force_reindex: bool
+Campos recomendados:
 
-Defaults:
+question: str
+answer: str
+mode: AnswerMode
+citations: list[GroundedCitation]
+used_citation_ids: list[int]
+retrieval_mode: str | None
+metadata: dict[str, Any] = {}
+insufficient_context: bool
 
-embedding_provider="deterministic_hash"
-embedding_dimensions=16
-batch_size=32
-include_sparse=True
-include_dense=True
-force_reindex=False
+Reglas:
 
-Validaciones:
+question no puede estar vacía.
+answer no puede estar vacía.
+Si mode == insufficient_context, insufficient_context debe ser True.
+Si mode == grounded, debería haber al menos una citation.
+No sobrecomplicar con confidence todavía; puede ir en metadata si ya hace falta.
+2. ContextBuilder
 
-batch_size > 0
-al menos uno de include_sparse o include_dense debe ser True
-embedding_dimensions > 0
-IndexManifest
+Crear app/generation/context.py.
 
-Campos sugeridos:
+Debe convertir RetrievedChunk[] en bloques de contexto citables.
 
-id
-corpus_version
-chunking_strategy
-embedding_provider
-embedding_dimensions
-document_count
-chunk_count
-indexed_chunk_count
-include_sparse
-include_dense
-config_hash
-created_at
-metadata
+Diseño recomendado:
 
-Puede ser dataclass o Pydantic model.
-
-IndexedChunkResult
-
-Campos sugeridos:
-
-chunk_id
-dense_indexed
-sparse_indexed
-error
-5. DB schema para indexing
-
-Revisar modelos actuales.
-
-Hay dos opciones razonables:
-
-Opción A — añadir columnas a chunks
-
-Añadir a chunks:
-
-embedding vector nullable
-embedding_provider string nullable
-embedding_dimensions int nullable
-embedding_indexed_at timestamptz nullable
-sparse_terms_json JSONB nullable
-sparse_indexed_at timestamptz nullable
-Opción B — crear tablas separadas
-
-Crear:
-
-chunk_embeddings
-chunk_sparse_terms
-index_manifests
-
-Recomendación para v1 simple:
-Usar Opción A si no complica SQLAlchemy/pgvector.
-Usar Opción B si la columna vector con dimensión dinámica complica demasiado.
-
-Importante:
-
-pgvector suele requerir dimensión definida en el tipo, por ejemplo vector(1536) o equivalente.
-Como esta fase usa deterministic_hash con dimensión pequeña, evita cerrar mal la arquitectura.
-Si hay riesgo de acoplar dimensión incorrecta, NO añadas todavía columna vector real.
-En ese caso, crea index_manifests y deja embedding storage real para Fase 4B.
-
-Decisión preferida:
-
-Crear tabla index_manifests.
-Añadir columnas de tracking no vectoriales a chunks si son útiles.
-Dejar columna vector real para Fase 4B cuando fijemos dimensión/modelo local real.
-
-Si decides no crear columna vector aún, documenta claramente:
-“Fase 4A validates provider interfaces and indexing orchestration; Fase 4B adds real pgvector storage.”
-
-6. Index manifest persistente
-
-Si creas tabla index_manifests, columnas sugeridas:
-
-id UUID primary key
-run_id UUID FK processing_runs.id nullable/on delete set null
-corpus_version string nullable
-chunking_strategy string nullable
-embedding_provider string not null
-embedding_dimensions int not null
-document_count int not null default 0
-chunk_count int not null default 0
-indexed_chunk_count int not null default 0
-include_sparse bool not null
-include_dense bool not null
-config_hash string not null
-metadata_json JSONB not null default {}
-created_at
-updated_at
-
-Añadir repositorio mínimo:
-
-class IndexManifestRepository:
-    add(...)
-    get_by_id(...)
-    list(...)
-    get_by_config_hash(...)
-
-No sobre-ingenierizar.
-
-7. Sparse representation inicial
-
-En app/indexing/sparse/tokenizer.py, implementar tokenizer simple:
-
-lowercase;
-extraer tokens alfanuméricos razonables;
-conservar términos con números cuando aplique;
-eliminar tokens vacíos;
-no añadir dependencias externas;
-no hacer stemming avanzado;
-no eliminar stopwords todavía, salvo que lo documentes.
-
-En app/indexing/sparse/document_terms.py, implementar:
-
-extract_sparse_terms(text: str) -> dict[str, int]
-
-Debe devolver frecuencias por término.
-
-Esto NO es retrieval todavía.
-Es solo representación sparse inicial/testable.
-
-8. Indexing service
-
-En app/indexing/service.py, crear IndexingService.
-
-Responsabilidad:
-
-recibir chunks de dominio o records convertidos;
-generar embeddings si include_dense=True;
-extraer sparse terms si include_sparse=True;
-devolver resultados estructurados;
-no requerir DB.
-
-Método sugerido:
-
-class IndexingService:
-    def __init__(self, embedding_provider: EmbeddingProvider):
-        ...
-
-    def index_chunks(
+class ContextBuilder:
+    def __init__(
         self,
-        chunks: Sequence[Chunk],
-        config: IndexingConfig,
-    ) -> list[IndexedChunkResult]:
+        max_chunks: int = 5,
+        max_context_chars: int = 8000,
+        max_chunk_chars: int = 2000,
+        min_score: float | None = None,
+    ):
         ...
 
-Como todavía no hay vector storage real:
+    def build(self, retrieved_chunks: Sequence[RetrievedChunk]) -> list[GroundedContextBlock]:
+        ...
 
-Puede devolver embedding/sparse data en memoria dentro del result o metadata.
-O puede delegar persistencia al runner.
-Mantener separación limpia.
+Requisitos:
+
+Mantener orden rankeado.
+Asignar citation_id empezando en 1.
+Respetar max_chunks.
+Respetar max_context_chars.
+Truncar chunks demasiado largos a max_chunk_chars.
+Preservar chunk_id, document_id, source_path, title, rank, score.
+Filtrar por min_score si se proporciona.
+No mutar los RetrievedChunk originales.
+Si no hay chunks válidos, devolver lista vacía.
+Truncamiento simple y explícito; añadir sufijo tipo ... si se recorta.
+
+Importante: esta clase no debe llamar a LLMs ni a DB. Debe ser pura y testeable.
+
+3. Prompt grounded
+
+Crear app/generation/prompts.py.
+
+Implementar una función simple:
+
+def build_grounded_prompt(question: str, context_blocks: Sequence[GroundedContextBlock]) -> str:
+    ...
+
+El prompt debe instruir al generador a:
+
+responder solo con el contexto proporcionado;
+citar usando [1], [2], etc.;
+no inventar;
+devolver una respuesta de insufficient context si el contexto no contiene la respuesta;
+mantener respuesta concisa pero útil;
+no citar fuentes que no estén en el contexto.
+
+Formato recomendado del contexto:
+
+[1]
+source: ...
+title: ...
+text:
+...
+
+[2]
+source: ...
+title: ...
+text:
+...
+
+Debe haber tests que aseguren:
+
+incluye la pregunta;
+incluye citation ids;
+incluye source/title si existen;
+no falla con metadata ausente;
+si no hay context blocks, construye prompt válido o lanza error controlado según diseño.
+
+No meter prompt engineering complejo todavía.
+
+4. GenerationProvider protocol
+
+Crear app/generation/providers/base.py.
+
+Definir protocolo:
+
+class GenerationProvider(Protocol):
+    name: str
+
+    def generate(self, prompt: str) -> str:
+        ...
+
+No introducir streaming todavía.
+
+No introducir async todavía salvo que el repo ya use async en capas equivalentes.
+
+No añadir OpenAI/Anthropic/local LLM real en esta fase.
+
+5. MockGenerationProvider
+
+Crear app/generation/providers/mock.py.
+
+Debe ser determinista y servir para tests/smoke.
+
+Diseño recomendado:
+
+class MockGenerationProvider:
+    name = "mock"
+
+    def generate(self, prompt: str) -> str:
+        ...
+
+Comportamiento aceptable:
+
+Si el prompt contiene contexto con bloques [1], [2], devolver una respuesta determinista que use las citas disponibles.
+Si no hay contexto útil, devolver una frase de insufficient context.
+No intentar semántica real.
+No depender de random.
+No depender de fecha/hora.
+No llamar APIs externas.
+
+Ejemplo de salida mock:
+
+Based on the provided context, the answer is supported by the retrieved evidence. [1]
+
+Para insufficient context:
+
+I do not have enough information in the provided context to answer this question.
+
+El objetivo no es calidad lingüística; es validar wiring y contratos.
+
+6. GroundedAnswerer
+
+Crear app/generation/answerer.py.
+
+Debe orquestar:
+
+question
+→ retrieval
+→ context builder
+→ prompt
+→ generation provider
+→ parse used citations
+→ GroundedAnswer
+
+Diseño recomendado:
+
+class GroundedAnswerer:
+    def __init__(
+        self,
+        retriever: RetrievalOrchestrator,
+        context_builder: ContextBuilder,
+        provider: GenerationProvider,
+    ):
+        ...
+
+    def answer(self, question: str) -> GroundedAnswer:
+        ...
+
+O bien aceptar configuración si el estilo actual del repo lo prefiere.
+
+Requisitos:
+
+Validar query vacía.
+Ejecutar retrieval mediante RetrievalOrchestrator.
+Construir contexto.
+Si no hay contexto, devolver GroundedAnswer con:
+mode = insufficient_context
+insufficient_context = True
+citations = []
+used_citation_ids = []
+answer clara de no suficiente contexto.
+Si hay contexto:
+construir prompt grounded;
+llamar provider;
+extraer citation ids usadas en la respuesta con regex simple \[(\d+)\];
+crear GroundedCitation[] para los context blocks;
+determinar mode:
+grounded si hay citas usadas válidas;
+partial si hay contexto pero la respuesta no usa citas o usa citas inválidas;
+insufficient_context si provider devuelve frase clara de insufficient context.
+No implementar validación semántica claim-by-claim todavía.
+No implementar citation verification avanzada todavía. Eso queda para Fase 7.
+No mutar retrieval results.
+
+Metadata útil:
+
+provider name;
+retrieval mode;
+total retrieved chunks;
+total context blocks;
+prompt chars;
+answer chars.
+7. CLI de generación
 
 Crear:
 
-def default_indexing_service() -> IndexingService:
-    ...
+app/generation/cli.py
 
-con DeterministicHashEmbeddingProvider.
+Debe permitir:
 
-9. Indexing runner persistente
+python -m app.generation.cli "What is legal-rag-engine?" \
+  --mode hybrid \
+  --chunking-strategy fixed_size \
+  --top-k 5 \
+  --provider mock \
+  --json
 
-En app/indexing/runner.py, crear función de alto nivel:
+Opciones recomendadas:
 
-def index_chunks_persisted(
-    config: IndexingConfig,
-    session: Session,
-) -> IndexingRunResult:
-    ...
+positional:
+  question
 
-Comportamiento:
+options:
+  --mode dense|sparse|hybrid
+  --chunking-strategy fixed_size|structure_aware
+  --top-k 5
+  --manifest-id <uuid>              optional
+  --embedding-provider deterministic_hash
+  --embedding-model <model>         optional
+  --embedding-dimensions 16
+  --rrf-k 60
+  --max-context-chars 8000
+  --max-chunks 5
+  --max-chunk-chars 2000
+  --provider mock
+  --json
 
-Crear ProcessingRun(run_type="indexing").
-Seleccionar chunks persistidos, opcionalmente filtrados por chunking_strategy.
-Crear o reutilizar IndexManifest por config_hash.
-Procesar chunks por batches.
-Persistir tracking del indexado según lo que permita el schema de Fase 4A.
-Marcar run completed/failed.
-Devolver resumen.
+Por ahora solo debe soportar --provider mock.
 
-Como no hay retrieval todavía:
+Si se pasa otro provider, devolver error controlado indicando que solo mock está soportado en esta fase.
 
-No implementar búsqueda.
-No implementar ranking.
-No implementar pgvector query.
+La salida JSON debe incluir:
 
-Idempotencia:
+question;
+answer;
+mode;
+insufficient_context;
+citations;
+used_citation_ids;
+metadata.
 
-Si existe manifest con mismo config_hash y no force_reindex, hacer skip o devolver manifest existente.
-Si force_reindex=True, crear nuevo run/manifest o actualizar según una decisión documentada.
-10. CLI de indexing
+Salida normal humana:
 
-Crear app/indexing/cli.py.
+answer;
+mode;
+citations resumidas.
 
-Uso sugerido:
+Debe seguir el estilo de las CLIs existentes del repo.
 
-python -m app.indexing.cli --chunking-strategy fixed_size --json
-python -m app.indexing.cli --chunking-strategy structure_aware --json
-python -m app.indexing.cli --include-sparse --include-dense --json
+8. Tests unitarios
 
-Debe:
+Añadir tests sin DB.
 
-requerir DB solo para modo persistente;
-fallar con mensaje claro si DB no está disponible;
-no afectar tests unitarios;
-no requerir modelos externos;
-usar deterministic provider por defecto.
-11. Config
+test_generation_models.py
 
-Actualizar app/core/config.py si procede:
+Cubrir:
 
-Añadir settings mínimos:
+GroundedAnswer válido grounded con citation.
+GroundedAnswer insufficient_context.
+question vacía falla.
+answer vacía falla.
+citation preview/truncamiento si se implementa.
+test_context_builder.py
 
-embedding_provider
-embedding_model
-embedding_dimensions
+Cubrir:
 
-Si ya existen embedding_provider y embedding_model, no duplicar.
+asigna citation ids desde 1.
+respeta orden.
+respeta max_chunks.
+respeta max_context_chars.
+trunca chunks largos.
+filtra por min_score.
+no muta input.
+devuelve lista vacía si no hay chunks.
+test_prompts.py
 
-Defaults compatibles:
+Cubrir:
 
-EMBEDDING_PROVIDER=local puede seguir en .env.example, pero para Fase 4A quizá mapear local a deterministic provider en dev/test.
-O usar EMBEDDING_PROVIDER=deterministic_hash hasta que Fase 4B añada local real.
-Elige una opción y documenta.
+prompt contiene pregunta.
+prompt contiene bloques [1], [2].
+prompt contiene source/title cuando existen.
+prompt instruye a no inventar.
+prompt instruye formato de citas.
+test_mock_provider.py
 
-No añadir Qdrant settings.
+Cubrir:
 
-12. Tests unitarios sin DB
+output determinista.
+usa [1] cuando hay contexto.
+insufficient context cuando no hay contexto.
+test_answerer.py
 
-Crear tests:
+Usar fake retriever/orchestrator y mock provider.
 
-tests/unit/test_embedding_provider.py
-tests/unit/test_sparse_tokenizer.py
-tests/unit/test_indexing_models.py
-tests/unit/test_indexing_service.py
+Cubrir:
 
-Casos mínimos:
-
-Embedding provider
-Mismo texto produce mismo vector.
-Vector tiene dimensión esperada.
-Textos distintos producen vectores distintos.
-embed_query y embed_texts([text])[0] son coherentes.
-Sparse tokenizer
-Lowercase.
-Extrae tokens simples.
-Conserva términos con números.
-Frecuencias correctas.
-IndexingConfig
-Defaults válidos.
-Rechaza batch_size <= 0.
-Rechaza include_sparse=False e include_dense=False.
-Rechaza dimensions <= 0.
-IndexingService
-Indexa chunks con dense + sparse.
-Puede indexar solo dense.
-Puede indexar solo sparse.
-Devuelve errores controlados si chunk vacío.
-No requiere DB.
+answer grounded cuando hay contexto y cita válida.
+insufficient_context cuando retrieval devuelve vacío.
+partial cuando provider devuelve respuesta sin citas.
+partial cuando provider usa cita inválida.
+metadata básica.
+query vacía falla.
 
 No requerir Postgres.
-No requerir Docker.
-No requerir APIs externas.
-No descargar modelos.
 
-13. Tests de integración DB opcionales
+9. Integration test opcional
 
-Crear si el schema lo permite:
+Si encaja sin fragilidad, añadir:
 
-tests/integration/test_indexing_persist.py
+tests/integration/test_generation_persist.py
 
-Debe estar gated con:
+Debe estar gated como los demás integration tests.
 
-pytest.mark.integration
-LEGAL_RAG_RUN_INTEGRATION_DB=1
+Flujo mínimo:
 
-Validar:
+ingest sample
+→ chunk
+→ index
+→ retrieval
+→ generation mock
+→ assert GroundedAnswer serializable
+→ assert mode in grounded/partial/insufficient_context
 
-Ingestar documento.
-Chunkear documento.
-Ejecutar indexing persisted.
-Crear manifest.
-Re-ejecutar y comprobar idempotent skip.
+No exigir calidad semántica con deterministic embeddings.
 
-No debe correr por defecto.
-
-14. Documentación
+10. Documentación
 
 Crear:
 
-docs/implementation/indexing-notes.md
+docs/implementation/generation-notes.md
 
 Debe explicar:
 
-objetivo de Fase 4A;
-diferencia entre indexing foundation y retrieval;
-provider deterministic hash;
-por qué no es embedding semántico real;
-sparse terms inicial;
-manifest;
-qué queda para Fase 4B:
-local real embeddings;
-pgvector storage;
-vector indexes;
-Postgres FTS materializado si aplica;
-qué queda para Fase 5:
-retrieval dense/sparse/hybrid;
-RRF;
-ranking.
+qué hace la Fase 6;
+diferencia entre retrieval y generation;
+qué es grounded generation;
+qué es context building;
+por qué el provider mock es intencional;
+por qué no se usa LLM obligatorio todavía;
+cómo funcionan las citas [1];
+qué significa grounded, partial, insufficient_context;
+limitaciones actuales;
+qué queda para Fase 7: citation verification.
 
 Actualizar:
 
-README.md
+docs/implementation/implementation-manual.md
 docs/README.md
-docs/implementation/implementation-manual.md solo con nota breve si procede.
-15. Calidad
+README.md
 
-Ejecutar:
+Añadir comandos:
 
+python -m app.generation.cli "What is legal-rag-engine?" \
+  --mode hybrid \
+  --chunking-strategy fixed_size \
+  --top-k 5 \
+  --provider mock \
+  --json
+
+Y flujo previo:
+
+docker compose up -d postgres
+alembic upgrade head
+
+python -m app.ingestion.cli data/sample_corpus/basic/intro.md --persist --json
+python -m app.chunking.cli <document_uuid> --strategy fixed_size --json
+python -m app.indexing.cli --chunking-strategy fixed_size --json
+python -m app.generation.cli "What is legal-rag-engine?" --mode hybrid --chunking-strategy fixed_size --top-k 5 --provider mock --json
+Constraints importantes
+
+No hacer:
+
+No implementar /v1/ask.
+No modificar FastAPI salvo necesidad mínima.
+No implementar Streamlit.
+No implementar OpenAI.
+No implementar Anthropic.
+No implementar Ollama/local LLM real todavía.
+No añadir API keys.
+No añadir dependencias cloud.
+No añadir Qdrant.
+No añadir Redis.
+No implementar reranking.
+No implementar claim-level verification.
+No implementar citation verification avanzada.
+No implementar evaluation generation completa.
+No meter PDF/HTML/OCR.
+No añadir usuarios/auth/billing.
+No convertir esto en producto compliance.
+
+Mantener:
+
+local-first;
+zero-cost baseline;
+tests unitarios sin DB;
+integration tests opt-in;
+typing fuerte;
+ruff clean;
+mypy clean;
+CLI coherente;
+docs claras;
+separación de capas.
+Criterios de aceptación
+
+La fase se considera completa si:
+
+Existe módulo app/generation.
+Existe ContextBuilder.
+Existe build_grounded_prompt.
+Existe GenerationProvider protocol.
+Existe MockGenerationProvider.
+Existe GroundedAnswerer.
+Existe CLI python -m app.generation.cli.
+La CLI soporta provider mock.
+La CLI devuelve JSON serializable.
+Hay modelo de answer con citations.
+Hay modo grounded.
+Hay modo partial.
+Hay modo insufficient_context.
+Se extraen citation ids con regex simple.
+Si no hay contexto, no se inventa respuesta.
+No se llama ningún LLM externo.
+No se requieren API keys.
+Tests unitarios cubren modelos, context, prompts, provider y answerer.
+Integration test, si existe, está gated.
+Documentación actualizada.
+pytest pasa.
+ruff check app tests pasa.
+mypy app pasa.
+Resultado esperado al terminar
+
+Devuelve un resumen con:
+
+archivos creados;
+archivos modificados;
+comandos para probar;
+tests añadidos;
+limitaciones conocidas;
+output de:
 pytest
 ruff check app tests
 mypy app
 
-La expectativa:
-
-tests pasan sin Postgres;
-integración DB skip por defecto;
-lint limpio;
-mypy limpio.
-16. Respuesta final esperada
-
-Al terminar, devuelve:
-
-Resumen de cambios.
-Ficheros creados/modificados.
-Migraciones creadas, si las hay.
-Tests añadidos.
-Comandos ejecutados y resultado.
-Decisiones tomadas, especialmente sobre si se añadió o no columna vector real.
-Qué queda para Fase 4B.
-Limitaciones conocidas.
-
-Criterios de aceptación:
-
-pytest pasa sin Postgres.
-/health sigue intacto.
-Existe EmbeddingProvider interface.
-Existe deterministic/mock embedding provider.
-Existe sparse tokenizer / sparse terms extractor.
-Existe IndexingConfig.
-Existe IndexManifest o decisión documentada equivalente.
-Existe runner/CLI de indexing si hay DB.
-No hay retrieval todavía.
-No hay generation todavía.
-No se introduce Qdrant.
-No se introducen proveedores externos.
-No se requiere Docker para tests unitarios.
+No hagas cambios fuera de scope.
