@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+from dataclasses import asdict
 from uuid import uuid4
 
 import pytest
 from app.generation.models import (
+    CitationVerificationResult,
     GroundedAnswer,
     GroundedContextBlock,
     citation_from_block,
 )
+from app.generation.providers.base import INSUFFICIENT_CONTEXT_SENTENCE
 
 
 def _block(**kwargs) -> GroundedContextBlock:
@@ -150,4 +153,108 @@ def test_grounded_context_block_invalid_citation_id() -> None:
             rank=1,
             score=None,
             text="hi",
+        )
+
+
+def test_citation_verification_result_valid() -> None:
+    r = CitationVerificationResult(
+        used_citation_ids=(1,),
+        available_citation_ids=(1, 2),
+        valid_citation_ids=(1,),
+        invalid_citation_ids=(),
+        unused_citation_ids=(2,),
+        duplicate_citation_ids=(),
+        citation_validity_rate=1.0,
+        has_citations=True,
+        has_valid_citations=True,
+        has_invalid_citations=False,
+    )
+    assert r.citation_validity_rate == 1.0
+
+
+def test_citation_verification_rejects_invalid_rate() -> None:
+    with pytest.raises(ValueError, match="citation_validity_rate"):
+        CitationVerificationResult(
+            used_citation_ids=(),
+            available_citation_ids=(),
+            valid_citation_ids=(),
+            invalid_citation_ids=(),
+            unused_citation_ids=(),
+            duplicate_citation_ids=(),
+            citation_validity_rate=1.5,
+            has_citations=False,
+            has_valid_citations=False,
+            has_invalid_citations=False,
+        )
+
+
+def test_citation_verification_asdict_roundtrip_keys() -> None:
+    r = CitationVerificationResult(
+        used_citation_ids=(1,),
+        available_citation_ids=(1,),
+        valid_citation_ids=(1,),
+        invalid_citation_ids=(),
+        unused_citation_ids=(),
+        duplicate_citation_ids=(),
+        citation_validity_rate=1.0,
+        has_citations=True,
+        has_valid_citations=True,
+        has_invalid_citations=False,
+    )
+    d = asdict(r)
+    assert d["citation_validity_rate"] == 1.0
+    assert d["valid_citation_ids"] == (1,)
+
+
+def test_grounded_rejects_citation_verification_with_invalid() -> None:
+    blk = _block()
+    cit = citation_from_block(blk)
+    bad = CitationVerificationResult(
+        used_citation_ids=(1, 99),
+        available_citation_ids=(1,),
+        valid_citation_ids=(1,),
+        invalid_citation_ids=(99,),
+        unused_citation_ids=(),
+        duplicate_citation_ids=(),
+        citation_validity_rate=0.5,
+        has_citations=True,
+        has_valid_citations=True,
+        has_invalid_citations=True,
+    )
+    with pytest.raises(ValueError, match="citation_verification"):
+        GroundedAnswer(
+            question="q",
+            answer="a [1]",
+            mode="grounded",
+            citations=(cit,),
+            used_citation_ids=(1,),
+            retrieval_mode=None,
+            insufficient_context=False,
+            citation_verification=bad,
+        )
+
+
+def test_insufficient_rejects_citation_verification_with_used() -> None:
+    bad = CitationVerificationResult(
+        used_citation_ids=(1,),
+        available_citation_ids=(1,),
+        valid_citation_ids=(1,),
+        invalid_citation_ids=(),
+        unused_citation_ids=(),
+        duplicate_citation_ids=(),
+        citation_validity_rate=1.0,
+        has_citations=True,
+        has_valid_citations=True,
+        has_invalid_citations=False,
+    )
+    with pytest.raises(ValueError, match="citation_verification"):
+        GroundedAnswer(
+            question="q?",
+            answer=INSUFFICIENT_CONTEXT_SENTENCE,
+            mode="insufficient_context",
+            citations=(),
+            used_citation_ids=(),
+            retrieval_mode=None,
+            insufficient_context=True,
+            citation_verification=bad,
         )

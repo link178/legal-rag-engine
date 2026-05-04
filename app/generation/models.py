@@ -19,6 +19,47 @@ _PREVIEW_LEN = 240
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
+class CitationVerificationResult:
+    """Mechanical verification of bracketed citation ids vs context blocks."""
+
+    used_citation_ids: tuple[int, ...]
+    available_citation_ids: tuple[int, ...]
+    valid_citation_ids: tuple[int, ...]
+    invalid_citation_ids: tuple[int, ...]
+    unused_citation_ids: tuple[int, ...]
+    duplicate_citation_ids: tuple[int, ...]
+    citation_validity_rate: float
+    has_citations: bool
+    has_valid_citations: bool
+    has_invalid_citations: bool
+
+    def __post_init__(self) -> None:
+        r = self.citation_validity_rate
+        if r < 0.0 or r > 1.0 or not (r == r):  # reject NaN
+            raise ValueError(
+                "citation_validity_rate must be finite and in [0.0, 1.0]; "
+                f"got {self.citation_validity_rate!r}"
+            )
+
+
+def empty_verification(*, available: tuple[int, ...] = ()) -> CitationVerificationResult:
+    """No brackets used in the answer; optional available ids from context."""
+    avail = tuple(sorted(dict.fromkeys(available)))
+    return CitationVerificationResult(
+        used_citation_ids=(),
+        available_citation_ids=avail,
+        valid_citation_ids=(),
+        invalid_citation_ids=(),
+        unused_citation_ids=avail,
+        duplicate_citation_ids=(),
+        citation_validity_rate=0.0,
+        has_citations=False,
+        has_valid_citations=False,
+        has_invalid_citations=False,
+    )
+
+
+@dataclass(frozen=True, kw_only=True, slots=True)
 class GroundedContextBlock:
     """One citable snippet passed to the prompt builder."""
 
@@ -76,6 +117,7 @@ class GroundedAnswer:
     retrieval_mode: str | None
     insufficient_context: bool
     metadata: dict[str, Any] = field(default_factory=_empty_metadata)
+    citation_verification: CitationVerificationResult | None = None
 
     def __post_init__(self) -> None:
         q = self.question.strip()
@@ -116,6 +158,21 @@ class GroundedAnswer:
                 raise ValueError("insufficient_context mode must have empty citations")
             if self.used_citation_ids:
                 raise ValueError("insufficient_context mode must have empty used_citation_ids")
+
+        cv = self.citation_verification
+        if cv is not None:
+            if self.mode == "grounded":
+                if not cv.has_valid_citations or cv.has_invalid_citations:
+                    raise ValueError(
+                        "grounded mode requires citation_verification with "
+                        "has_valid_citations=True and has_invalid_citations=False"
+                    )
+            elif self.mode == "insufficient_context":
+                if cv.has_citations:
+                    raise ValueError(
+                        "insufficient_context mode requires citation_verification "
+                        "with has_citations=False"
+                    )
 
 
 def citation_from_block(block: GroundedContextBlock) -> GroundedCitation:
