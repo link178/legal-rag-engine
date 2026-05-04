@@ -17,6 +17,8 @@ class IndexingConfig:
 
     embedding_provider: str = "deterministic_hash"
     embedding_dimensions: int = 16
+    # Model id for providers that need one (e.g. local_sentence_transformers); None/blank if N/A.
+    embedding_model: str | None = None
     chunking_strategy: str | None = None  # filter; None means all persisted strategies
     batch_size: int = 32
     include_sparse: bool = True
@@ -33,6 +35,12 @@ class IndexingConfig:
         if not self.include_sparse and not self.include_dense:
             raise ValueError("at least one of include_sparse or include_dense must be True")
 
+    def normalized_embedding_model(self) -> str | None:
+        if self.embedding_model is None:
+            return None
+        s = self.embedding_model.strip()
+        return s or None
+
     def normalized_dict(self) -> dict[str, Any]:
         """Canonical dict for config_hash (sorted keys in JSON)."""
         return {
@@ -41,6 +49,7 @@ class IndexingConfig:
             if self.chunking_strategy
             else None,
             "embedding_dimensions": self.embedding_dimensions,
+            "embedding_model": self.normalized_embedding_model(),
             "embedding_provider": self.embedding_provider.strip(),
             "include_dense": self.include_dense,
             "include_sparse": self.include_sparse,
@@ -98,6 +107,8 @@ class IndexManifest:
     document_count: int = 0
     chunk_count: int = 0
     indexed_chunk_count: int = 0
+    embedding_model: str | None = None
+    embeddings_persisted: bool = False
     metadata: dict[str, Any] = field(default_factory=dict)
     created_at: Any = None  # datetime when loaded from DB
     updated_at: Any = None

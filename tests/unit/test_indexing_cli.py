@@ -17,6 +17,9 @@ from app.indexing.models import IndexingRunResult, IndexManifest
 def fake_settings():
     class _S:
         database_url = "postgresql://localhost/test"
+        embedding_provider = "deterministic_hash"
+        embedding_dimensions = 16
+        embedding_model = ""
 
     return _S()
 
@@ -33,6 +36,8 @@ def test_cli_json_success(fake_settings, capsys: pytest.CaptureFixture[str]) -> 
         chunk_set_hash="b",
         manifest_hash="c" * 64,
         id=mid,
+        embedding_model=None,
+        embeddings_persisted=True,
     )
     fake = IndexingRunResult(
         manifest=m,
@@ -47,6 +52,33 @@ def test_cli_json_success(fake_settings, capsys: pytest.CaptureFixture[str]) -> 
     payload = json.loads(capsys.readouterr().out)
     assert payload["skipped_existing"] is False
     assert payload["manifest_id"] == str(mid)
+    assert payload["embedding_provider"] == "deterministic_hash"
+    assert payload["embeddings_persisted"] is True
+    assert payload["embedding_model"] is None
+
+
+def test_cli_embedding_model_passed_to_runner(fake_settings) -> None:
+    captured: list[object] = []
+
+    def capture(cfg, **kwargs):
+        captured.append(cfg)
+        return IndexingRunResult(manifest=None, error="stop")
+
+    with patch("app.indexing.cli.index_chunks_persisted", side_effect=capture):
+        with patch("app.indexing.cli.get_settings", return_value=fake_settings):
+            rc = main(
+                [
+                    "--chunking-strategy",
+                    "fixed_size",
+                    "--embedding-model",
+                    "intfloat/multilingual-e5-small",
+                    "--json",
+                ]
+            )
+    assert rc == 1
+    assert len(captured) == 1
+    cfg = captured[0]
+    assert cfg.embedding_model == "intfloat/multilingual-e5-small"
 
 
 def test_cli_dense_sparse_mutex(fake_settings) -> None:
@@ -65,6 +97,7 @@ def test_cli_skipped_branch_payload(fake_settings, capsys: pytest.CaptureFixture
         chunk_set_hash="b",
         manifest_hash=mh,
         id=uuid4(),
+        embeddings_persisted=True,
     )
     run = ProcessingRun(run_type="indexing", status="completed", id=uuid.uuid4())
     fake = IndexingRunResult(

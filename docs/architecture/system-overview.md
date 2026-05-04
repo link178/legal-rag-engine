@@ -12,7 +12,7 @@ Document Sources
     → Normalizer
     → Chunker
     → PostgreSQL documents/chunks
-    → pgvector dense index
+    → pgvector storage (dense index / ANN in later phases)
     → Postgres FTS / sparse local index
     → Dense/Sparse/Hybrid Retriever
     → RRF Fusion
@@ -29,7 +29,7 @@ Document Sources
 - **Normalizer**: limpia texto, conserva metadatos y calcula checksums.
 - **Chunker**: produce chunks comparables con estrategia fixed-size o structure-aware.
 - **PostgreSQL documents/chunks**: mantiene trazabilidad, metadatos y resultados de evaluación.
-- **pgvector dense index**: backend vectorial default de v1.
+- **pgvector**: backend vectorial default de v1 (Phase 4B persiste embeddings; índice ANN y retrieval denso en fases posteriores).
 - **Postgres FTS / sparse local index**: rama de sparse retrieval inicial.
 - **Dense/Sparse/Hybrid Retriever**: permite modos comparables.
 - **RRF Fusion**: combina rankings dense y sparse.

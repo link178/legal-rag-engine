@@ -1,11 +1,11 @@
-"""Operator-triggered persisted indexing run (Phase 4A: manifest trace, no pgvector column)."""
+"""Operator-triggered persisted indexing run (Phase 4B: manifest + optional pgvector rows)."""
 
 from __future__ import annotations
 
 from datetime import UTC, datetime
 
 from app.domain.models import ProcessingRun
-from app.indexing.dense.mock_provider import DeterministicHashEmbeddingProvider
+from app.indexing.dense.factory import build_embedding_provider
 from app.indexing.models import (
     IndexedChunkResult,
     IndexingConfig,
@@ -20,6 +20,7 @@ from app.indexing.models import (
 from app.indexing.service import IndexingService
 from app.storage.postgres.models import IndexManifestRecord
 from app.storage.postgres.repositories import (
+    ChunkEmbeddingRepository,
     ChunkRepository,
     IndexManifestRepository,
     ProcessingRunRepository,
@@ -36,6 +37,8 @@ def _manifest_row_to_domain(row: IndexManifestRecord) -> IndexManifest:
         chunking_strategy=row.chunking_strategy,
         embedding_provider=row.embedding_provider,
         embedding_dimensions=row.embedding_dimensions,
+        embedding_model=row.embedding_model,
+        embeddings_persisted=row.embeddings_persisted,
         document_count=row.document_count,
         chunk_count=row.chunk_count,
         indexed_chunk_count=row.indexed_chunk_count,
@@ -51,11 +54,7 @@ def _manifest_row_to_domain(row: IndexManifestRecord) -> IndexManifest:
 
 
 def _make_indexing_service(config: IndexingConfig) -> IndexingService:
-    if config.embedding_provider.strip() != "deterministic_hash":
-        raise ValueError(
-            f"Phase 4A unsupported embedding_provider: {config.embedding_provider!r}"
-        )
-    provider = DeterministicHashEmbeddingProvider(dimensions=config.embedding_dimensions)
+    provider = build_embedding_provider(config)
     return IndexingService(provider)
 
 
@@ -66,7 +65,11 @@ def index_chunks_persisted(
     corpus_version: str | None = None,
     indexing_service: IndexingService | None = None,
 ) -> IndexingRunResult:
-    """Persist run + manifest chunks; optionally skip duplicate manifest."""
+    """
+    Persist run + manifest chunks + optional dense vectors.
+
+    Optionally skip when an up-to-date manifest with ``embeddings_persisted`` exists.
+    """
     now = datetime.now(UTC)
     run_domain = ProcessingRun(
         run_type="indexing",
@@ -79,6 +82,7 @@ def index_chunks_persisted(
             run_repo = ProcessingRunRepository(session)
             chunk_repo = ChunkRepository(session)
             manifest_repo = IndexManifestRepository(session)
+            embed_repo = ChunkEmbeddingRepository(session)
 
             persisted_run = run_repo.add(run_domain)
             run_id = persisted_run.id
@@ -114,7 +118,11 @@ def index_chunks_persisted(
             mh = compute_manifest_hash(cfg_hash, cs_hash)
 
             existing = manifest_repo.get_latest_by_manifest_hash(mh)
-            if existing is not None and not config.force_reindex:
+            if (
+                existing is not None
+                and existing.embeddings_persisted
+                and not config.force_reindex
+            ):
                 run_repo.mark_completed(
                     run_id,
                     chunks_created=len(chunks),
@@ -138,14 +146,18 @@ def index_chunks_persisted(
 
             indexed_ok = 0
             chunk_results: list[IndexedChunkResult] = []
+            embeddings_inserted = 0
 
             document_count = len({c.document_id for c in chunks})
+            embedding_model_val = config.normalized_embedding_model()
             mh_row = manifest_repo.add_manifest_row(
                 run_id=run_id,
                 corpus_version=corpus_version,
                 chunking_strategy=config.chunking_strategy,
                 embedding_provider=config.embedding_provider.strip(),
                 embedding_dimensions=config.embedding_dimensions,
+                embedding_model=embedding_model_val,
+                embeddings_persisted=False,
                 document_count=document_count,
                 chunk_count=len(chunks),
                 indexed_chunk_count=0,
@@ -154,17 +166,44 @@ def index_chunks_persisted(
                 config_hash=cfg_hash,
                 chunk_set_hash=cs_hash,
                 manifest_hash=mh,
-                metadata_json={"phase": "4a", "skipped": False},
+                metadata_json={"phase": "4b", "skipped": False},
             )
             mv_row_id = mh_row.id
 
             batch_size = config.batch_size
             for start in range(0, len(chunks), batch_size):
                 batch = chunks[start : start + batch_size]
-                perf_results, _dense_out, sparse_maps = svc.index_chunks(batch, config)
-                for i, _c in enumerate(batch):
-                    r = perf_results[i]
+                perf_results, dense_out, sparse_maps = svc.index_chunks(batch, config)
+                for i, c in enumerate(batch):
+                    r_prior = perf_results[i]
                     sparse_dict = sparse_maps[i] if sparse_maps is not None else None
+
+                    err = r_prior.error
+                    dense_flag = r_prior.dense_indexed
+                    sparse_flag = r_prior.sparse_indexed
+                    vec: list[float] | None = None
+
+                    if config.include_dense:
+                        if dense_out is None:
+                            err = err or "missing dense output batch"
+                            dense_flag = False
+                        else:
+                            vec = dense_out[i]
+                            if len(vec) != config.embedding_dimensions:
+                                err = (
+                                    f"dimension mismatch: got {len(vec)}, "
+                                    f"expected {config.embedding_dimensions}"
+                                )
+                                dense_flag = False
+                                vec = None
+
+                    r = IndexedChunkResult(
+                        chunk_id=r_prior.chunk_id,
+                        dense_indexed=dense_flag,
+                        sparse_indexed=sparse_flag,
+                        error=err,
+                    )
+
                     manifest_repo.add_manifest_chunk_row(
                         manifest_id=mv_row_id,
                         chunk_id=r.chunk_id,
@@ -174,11 +213,37 @@ def index_chunks_persisted(
                         error_message=r.error,
                     )
                     chunk_results.append(r)
+
+                    if (
+                        config.include_dense
+                        and r.dense_indexed
+                        and r.error is None
+                        and vec is not None
+                    ):
+                        embed_repo.add(
+                            chunk_id=r.chunk_id,
+                            index_manifest_id=mv_row_id,
+                            embedding_provider=config.embedding_provider.strip(),
+                            embedding_model=embedding_model_val,
+                            embedding_dimensions=config.embedding_dimensions,
+                            embedding=vec,
+                            text_checksum=c.checksum or "",
+                        )
+                        embeddings_inserted += 1
+
                     if r.error is None:
                         indexed_ok += 1
 
             mh_row.indexed_chunk_count = indexed_ok
             mh_row.document_count = document_count
+
+            if config.include_dense:
+                mh_row.embeddings_persisted = all(
+                    x.error is None and x.dense_indexed for x in chunk_results
+                )
+            else:
+                mh_row.embeddings_persisted = False
+
             session.flush()
 
             run_repo.mark_completed(
@@ -188,6 +253,7 @@ def index_chunks_persisted(
                     "manifest_hash": mh,
                     "manifest_id": str(mv_row_id),
                     "indexed_chunk_count": indexed_ok,
+                    "embeddings_inserted": embeddings_inserted,
                 },
             )
 
@@ -206,4 +272,3 @@ def index_chunks_persisted(
             skipped_existing=False,
             error=f"{type(e).__name__}: {e}",
         )
-

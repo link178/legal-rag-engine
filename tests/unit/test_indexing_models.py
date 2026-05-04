@@ -17,6 +17,7 @@ def test_indexing_config_defaults() -> None:
     c = IndexingConfig()
     assert c.embedding_provider == "deterministic_hash"
     assert c.embedding_dimensions == 16
+    assert c.embedding_model is None
     assert c.batch_size == 32
     assert c.include_sparse is True
     assert c.include_dense is True
@@ -41,6 +42,20 @@ def test_config_hash_stable() -> None:
     a = IndexingConfig(chunking_strategy="fixed_size")
     b = IndexingConfig(chunking_strategy="fixed_size")
     assert a.config_hash() == b.config_hash()
+
+
+def test_config_hash_differs_when_embedding_model_differs() -> None:
+    a = IndexingConfig(
+        embedding_provider="local_sentence_transformers",
+        embedding_model="intfloat/multilingual-e5-small",
+        embedding_dimensions=384,
+    )
+    b = IndexingConfig(
+        embedding_provider="local_sentence_transformers",
+        embedding_model="intfloat/multilingual-e5-base",
+        embedding_dimensions=384,
+    )
+    assert a.config_hash() != b.config_hash()
 
 
 def test_chunk_set_hash_order_independent() -> None:

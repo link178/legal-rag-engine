@@ -45,9 +45,15 @@ The legal corpus use case is important, but the engine remains reusable for gene
 
 **Phase 3 — chunking.** Fixed-size and Markdown structure-aware strategies produce traceable domain `Chunk` rows. Optional Postgres persistence stores `chunks` with `created_by_run_id` and records a `processing_runs` row with `run_type="chunking"`. Operators run `python -m app.chunking.cli <document_uuid> --strategy fixed_size|structure_aware`. Still **no** real embeddings, dense/sparse retrieval, or Streamlit demo.
 
-**Phase 4A — indexing foundations.** Deterministic pseudo-embeddings (no model downloads), sparse term-frequency maps, and manifest tables `index_manifests` / `index_manifest_chunks` trace indexing runs. Operators run `python -m app.indexing.cli` after migrate + ingest + chunk. Retrieval, generation, `/v1/*` API, and pgvector storage on `chunks` remain out of scope until Phase 4B+ (see [`docs/implementation/indexing-notes.md`](docs/implementation/indexing-notes.md)).
+**Phase 4A — indexing foundations.** Deterministic pseudo-embeddings (no model downloads), sparse term-frequency maps, and manifest tables `index_manifests` / `index_manifest_chunks` trace indexing runs.
 
-Retrieval, generation, Streamlit demo, and evaluation wiring beyond chunk persistence remain **scaffolds or placeholders** until later phases.
+**Phase 4B — dense storage.** Vectors persist in **`chunk_embeddings`** (pgvector). Default provider **`deterministic_hash`**; optional **`local_sentence_transformers`** via `pip install -e ".[local-embeddings]"`. Operators run `python -m app.indexing.cli` after migrate + ingest + chunk (see [`docs/implementation/indexing-notes.md`](docs/implementation/indexing-notes.md)).
+
+**Phase 5 — retrieval.** Dense (pgvector L2), baseline lexical sparse over persisted term maps, hybrid with **RRF**, and operator CLI `python -m app.retrieval.cli` (no API route, no generation). See [`docs/implementation/retrieval-notes.md`](docs/implementation/retrieval-notes.md). ANN indexes, Postgres FTS, reranking, Streamlit, and `/v1/*` remain future work.
+
+**Phase 5.5 — retrieval evaluation baseline.** Golden JSONL (e.g. `data/eval/retrieval_golden.jsonl`), Hit@k / MRR grading, JSON and optional Markdown reports, operator CLI `python -m app.evaluation.cli` (read-only DB; no new `processing_runs`). See [`docs/implementation/evaluation-notes.md`](docs/implementation/evaluation-notes.md).
+
+**Phase 6 — grounded generation (mock).** `ContextBuilder`, grounded prompt assembly, `GenerationProvider` protocol, `MockGenerationProvider`, `GroundedAnswerer.from_session`, and operator CLI `python -m app.generation.cli` (requires ingest + chunk + index; read-only DB; no `/v1/ask`). See [`docs/implementation/generation-notes.md`](docs/implementation/generation-notes.md). Real LLM adapters, Streamlit, full citation verification, and answer-quality evaluation remain future work.
 
 ## Phase 1: run locally
 
@@ -142,16 +148,68 @@ python -m app.chunking.cli <document_uuid> --strategy structure_aware --json
 
 Details: [`docs/implementation/chunking-notes.md`](docs/implementation/chunking-notes.md).
 
-### Phase 4A: index persisted chunks (CLI)
+### Phase 4A–4B: index persisted chunks (CLI)
 
-After `alembic upgrade head`, ingest with `--persist`, then chunk a document. Corpus-wide or per-strategy indexing:
+After `alembic upgrade head`, ingest with `--persist`, then chunk a document. Corpus-wide or per-strategy indexing (defaults from `EMBEDDING_PROVIDER`, `EMBEDDING_DIMENSIONS`, `EMBEDDING_MODEL` in `.env`):
 
 ```bash
 python -m app.indexing.cli --chunking-strategy fixed_size --json
 python -m app.indexing.cli --json
 ```
 
+Optional real local embeddings (install extra first):
+
+```bash
+python -m app.indexing.cli --chunking-strategy fixed_size \
+  --embedding-provider local_sentence_transformers \
+  --embedding-model intfloat/multilingual-e5-small --embedding-dimensions 384 --json
+```
+
 See [`docs/implementation/indexing-notes.md`](docs/implementation/indexing-notes.md).
+
+### Phase 5: retrieve chunks (CLI)
+
+After indexing, with the same Postgres and manifest filters (defaults from `.env` when auto-selecting a manifest):
+
+```bash
+python -m app.retrieval.cli "your question" --mode hybrid --json
+python -m app.retrieval.cli "keywords" --mode dense_only --top-k 5
+```
+
+Details: [`docs/implementation/retrieval-notes.md`](docs/implementation/retrieval-notes.md).
+
+### Phase 5.5: evaluate retrieval (CLI)
+
+After ingest, chunk, and indexing for the corpus under test (same Postgres + manifest filters as Phase 5):
+
+```bash
+python -m app.evaluation.cli data/eval/retrieval_golden.jsonl \
+  --mode hybrid \
+  --chunking-strategy fixed_size \
+  --top-k 5 \
+  --json
+
+python -m app.evaluation.cli data/eval/retrieval_golden.jsonl \
+  --output eval-report.json \
+  --markdown-output eval-report.md
+```
+
+Details: [`docs/implementation/evaluation-notes.md`](docs/implementation/evaluation-notes.md).
+
+### Phase 6: grounded answer (CLI)
+
+After ingest, chunk, and indexing for the corpus under test (same Postgres + manifest filters as Phase 5):
+
+```bash
+python -m app.generation.cli "What does the basic intro file describe?" \
+  --mode hybrid \
+  --chunking-strategy fixed_size \
+  --top-k 5 \
+  --provider mock \
+  --json
+```
+
+Details: [`docs/implementation/generation-notes.md`](docs/implementation/generation-notes.md).
 
 ### Tests and quality
 
@@ -217,7 +275,10 @@ Document Sources
 - Persistence notes (Phase 2A): [`docs/implementation/persistence-notes.md`](docs/implementation/persistence-notes.md)
 - Ingestion notes (Phase 2B): [`docs/implementation/ingestion-notes.md`](docs/implementation/ingestion-notes.md)
 - Chunking notes (Phase 3): [`docs/implementation/chunking-notes.md`](docs/implementation/chunking-notes.md)
-- Indexing notes (Phase 4A): [`docs/implementation/indexing-notes.md`](docs/implementation/indexing-notes.md)
+- Indexing notes (Phases 4A–4B): [`docs/implementation/indexing-notes.md`](docs/implementation/indexing-notes.md)
+- Retrieval notes (Phase 5): [`docs/implementation/retrieval-notes.md`](docs/implementation/retrieval-notes.md)
+- Evaluation notes (Phase 5.5): [`docs/implementation/evaluation-notes.md`](docs/implementation/evaluation-notes.md)
+- Generation notes (Phase 6): [`docs/implementation/generation-notes.md`](docs/implementation/generation-notes.md)
 - Learning guide: [`docs/learning/rag-learning-guide.md`](docs/learning/rag-learning-guide.md)
 - System overview: [`docs/architecture/system-overview.md`](docs/architecture/system-overview.md)
 - ADR-0001 (local-first zero-cost baseline): [`docs/decisions/0001-local-first-zero-cost-stack.md`](docs/decisions/0001-local-first-zero-cost-stack.md)
@@ -228,12 +289,13 @@ Document Sources
 2. **Persistence foundation (Phase 2A)**: domain models, SQLAlchemy + Alembic for `documents` / `chunks` / `processing_runs`, repositories (no ingestion API yet).
 3. **Ingestion (Phase 2B)**: `.txt` / Markdown loaders, normalization, checksums, optional CLI persistence + run trace (`processing_runs`); still no `/v1/ingest`.
 4. **Chunking (Phase 3)**: fixed-size + structure-aware strategies, chunk metadata + checksums, optional persisted chunking + run trace (`chunks.created_by_run_id`); still no embeddings/retrieval/generation API.
-5. **Indexing foundations (Phase 4A)**: deterministic embedding interface + sparse term maps + manifest tables; CLI; no pgvector column on chunks yet (see indexing notes).
-6. **Dense/sparse indexing (Phase 4B+)**: local embeddings, pgvector, Postgres FTS and/or sparse retrieval storage.
-7. **Hybrid retrieval**: dense retrieval, sparse retrieval, RRF fusion and comparable modes.
-8. **Grounded generation**: context builder, mock/local generation, citations and insufficient context fallback.
-9. **Evaluation**: golden dataset, retrieval metrics, citation checks and reproducible reports.
-10. **Demo and polish**: Streamlit demo, seed scripts, smoke tests and documentation cleanup.
+5. **Indexing (Phases 4A–4B)**: deterministic + optional local embeddings; manifest tables; **`chunk_embeddings`** with pgvector; CLI (see indexing notes).
+6. **Retrieval (Phase 5)**: dense pgvector search, baseline sparse over manifest term JSON, hybrid + RRF; operator CLI (see retrieval notes). Postgres FTS / ANN indexes optional later.
+7. **Retrieval evaluation baseline (Phase 5.5)**: golden JSONL, Hit@k/MRR, JSON/Markdown reports; operator CLI (see evaluation notes). No generation or `/v1/evaluate`.
+8. **Sparse retrieval storage (future)**: Postgres FTS / GIN as designed; Phase 5 sparse is manifest-bound lexical baseline only.
+9. **Grounded generation (Phase 6, partial)**: context builder + mock `GenerationProvider` + operator CLI wired to retrieval manifest (see generation notes). Real LLMs, citation verification, and `/v1/ask` remain future milestones.
+10. **End-to-end evaluation**: citation checks, claim-level metrics, reproducible reports beyond retrieval-only.
+11. **Demo and polish**: Streamlit demo, seed scripts, smoke tests and documentation cleanup.
 
 ## Explicit Exclusions
 

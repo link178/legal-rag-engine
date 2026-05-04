@@ -14,7 +14,8 @@ def test_defaults_match_bootstrap() -> None:
     assert s.app_env == "development"
     assert s.debug is True
     assert "postgresql" in s.database_url or s.database_url.startswith("postgresql")
-    assert s.embedding_provider == "local"
+    assert s.embedding_provider == "deterministic_hash"
+    assert s.embedding_dimensions == 16
     assert s.generation_provider == "mock"
     assert s.retrieval_mode == DEFAULT_RETRIEVAL_MODE
     assert s.log_level == "INFO"

@@ -6,6 +6,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
+from pgvector.sqlalchemy import Vector
 from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, Text, UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -148,7 +149,7 @@ class ChunkRecord(Base):
 
 
 class IndexManifestRecord(Base):
-    """One indexing build snapshot (Phase 4A: traceability only; no pgvector column here)."""
+    """One indexing build snapshot (manifest + Phase 4B embeddings_persisted flag)."""
 
     __tablename__ = "index_manifests"
 
@@ -164,6 +165,10 @@ class IndexManifestRecord(Base):
     chunking_strategy: Mapped[str | None] = mapped_column(Text, nullable=True)
     embedding_provider: Mapped[str] = mapped_column(Text, nullable=False)
     embedding_dimensions: Mapped[int] = mapped_column(Integer, nullable=False)
+    embedding_model: Mapped[str | None] = mapped_column(Text, nullable=True)
+    embeddings_persisted: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
     document_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     chunk_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     indexed_chunk_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
@@ -228,5 +233,49 @@ class IndexManifestChunkRecord(Base):
             "manifest_id",
             "chunk_id",
             name="uq_index_manifest_chunks_manifest_chunk",
+        ),
+    )
+
+
+class ChunkEmbeddingRecord(Base):
+    """Dense vector per chunk for one index manifest (Phase 4B; no ANN index yet)."""
+
+    __tablename__ = "chunk_embeddings"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    chunk_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("chunks.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    index_manifest_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("index_manifests.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    embedding_provider: Mapped[str] = mapped_column(Text, nullable=False)
+    embedding_model: Mapped[str | None] = mapped_column(Text, nullable=True)
+    embedding_dimensions: Mapped[int] = mapped_column(Integer, nullable=False)
+    embedding: Mapped[list[float]] = mapped_column(Vector, nullable=False)
+    text_checksum: Mapped[str] = mapped_column(Text, nullable=False)
+    metadata_json: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+
+    __table_args__ = (
+        Index("ix_chunk_embeddings_chunk_id", "chunk_id"),
+        Index("ix_chunk_embeddings_index_manifest_id", "index_manifest_id"),
+        UniqueConstraint(
+            "chunk_id",
+            "index_manifest_id",
+            name="uq_chunk_embeddings_chunk_manifest",
         ),
     )
