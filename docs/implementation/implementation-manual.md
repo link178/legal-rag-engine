@@ -216,6 +216,8 @@ Baseline fixed-size + Markdown structure-aware implementations live under `app/c
 
 **Phase 6 (generation mock wired):** `ContextBuilder`, `build_grounded_prompt`, protocolo `GenerationProvider` (`generate(prompt: str) -> str`), `MockGenerationProvider`, `GroundedAnswerer.from_session`, CLI `python -m app.generation.cli`; lectura únicamente PostgreSQL (**sin nuevas filas `processing_runs`**). Ver [`generation-notes.md`](generation-notes.md).
 
+**Phase 7 (citation verification):** `verify_citations`, `CitationVerificationResult`, integración en `GroundedAnswerer` y CLI JSON/resumen humano (`citation_verification`); sin migraciones ni tablas nuevas.
+
 Provider interface:
 
 ```python
@@ -287,7 +289,7 @@ class Reranker(Protocol):
 
 Si no está disponible, el sistema debe seguir funcionando.
 
-## 13. Grounded generation (Phase 6 shipped)
+## 13. Grounded generation (Phase 6 shipped) + citation verification (Phase 7)
 
 Implementado como capa engine-only (sin endpoints FastAPI todavía). Flujo:
 
@@ -295,7 +297,8 @@ Implementado como capa engine-only (sin endpoints FastAPI todavía). Flujo:
 2. `ContextBuilder` convierte ``RetrievedChunk`` rankeados en `GroundedContextBlock` (ids citables desde 1, truncado determinista).
 3. `build_grounded_prompt(question, blocks, insufficient_sentence=...)` genera una sola cadena lista para enviar al proveedor.
 4. ``GenerationProvider.generate(prompt: str) -> str`` produce la respuesta en bruto (`MockGenerationProvider` en esta fase).
-5. `extract_cited_ids(answer_text)` encuentra refs `[123]` únicamente dígitos; modo `grounded` si algún id válido aparece contra los bloques, `partial` si no hay cruce, `insufficient_context` cuando no hay contexto utilizable después del builder o cuando la respuesta igual al fallback estandarizado (`INSUFFICIENT_CONTEXT_SENTENCE`).
+5. `verify_citations(answer_text, blocks)` (Phase 7) compara todas las apariciones `[N]` con los ids de bloque; clasifica `CitationVerificationResult`.
+6. Modo de respuesta: `insufficient_context` si no hay bloques tras `ContextBuilder` o la respuesta igual a `INSUFFICIENT_CONTEXT_SENTENCE`; `grounded` si hay al menos una cita válida y ninguna inválida; `partial` en el resto de casos con contexto (sin citas válidas, sólo inválidas, o mezcla válida+inválida). `used_citation_ids` lleva sólo ids válidos citados.
 
 Formato de contexto determinista (cabeceras de una línea + cuerpo de texto):
 
@@ -306,21 +309,31 @@ Formato de contexto determinista (cabeceras de una línea + cuerpo de texto):
 
 Cabeceras con metadatos faltantes usan marcador Unicode `—` para mantener el parseo estable.
 
-Los proveedores v1 efectivos aquí solo incluyen **`MockGenerationProvider`**; proveedores locales/cloud son extensiones opcionales futuras. `verify_citations` sigue `NotImplementedError` hasta citation verification avanzado (§14 siguiente).
+Los proveedores v1 efectivos aquí solo incluyen **`MockGenerationProvider`**; proveedores locales/cloud son extensiones opcionales futuras.
 
-## 14. Citation verification e insufficient context fallback
+## 14. Verificación mecánica de citas y fallback insufficient context
 
-Verificar al menos que las citas existen, apuntan a chunks recuperados y no están fuera de rango. Opcionalmente añadir solapamiento léxico o semántico básico.
+La verificación **implementada** comprueba que cada bracket `[N]` en la respuesta apunte a un bloque de contexto presente en el prompt (sin DB, sin LLM). `GroundedAnswer.citation_verification` y CLI JSON exponen válidas, inválidas, no usadas, duplicados y `citation_validity_rate`. No hay solapamiento léxico ni entailment semántico en esta fase.
 
-Activar `insufficient_context` si el top retrieval score es demasiado bajo, hay poco soporte útil, las citas no sostienen la respuesta o el contexto recuperado es contradictorio.
+`insufficient_context` se sigue activando sólo cuando no hay bloques utilizables después de `ContextBuilder` o cuando la salida es exactamente la frase sentinel; **no** se baja por score de retrieval ni contradicción entre chunks (esto queda fuera del alcance público actual).
 
-## 15. API
+## 15. API (Phases 8–9 shipped baseline)
 
-- `POST /v1/ingest`: procesa documentos y devuelve documentos, chunks, errores y versión del índice.
-- `GET /v1/documents`: lista documentos indexados.
-- `POST /v1/ask`: recibe `question`, `mode`, `top_k`, `rerank`; devuelve respuesta, citas, confidence, `insufficient_context`, chunks y modo.
-- `POST /v1/evaluate`: ejecuta benchmark y devuelve resumen.
-- `GET /health`: estado del servicio.
+Minimal **engine-aligned** HTTP surface under `/v1` (thin FastAPI routers + Pydantic + error envelope). See [`api-notes.md`](implementation/api-notes.md).
+
+- `POST /v1/ingest`: one local file path; optional `persist` (default true). Wraps `IngestionService` / `ingest_file_persisted` (same as CLI).
+- `GET /v1/documents`: list persisted documents (`limit`, `offset`).
+- `GET /v1/documents/{document_id}`: metadata + `chunks_count`.
+- `GET /v1/documents/{document_id}/chunks`: paginated chunks (optional `strategy`; read-only DB).
+- `POST /v1/chunk`: wraps `chunk_document_persisted` (same as `app.chunking.cli`); records `processing_runs` + `chunks`.
+- `POST /v1/index`: wraps `index_chunks_persisted` (same as `app.indexing.cli` embedding defaults from `Settings` when omitted); records `processing_runs` + manifests.
+- `GET /v1/index-manifests` / `GET /v1/index-manifests/{manifest_id}`: manifest list/detail (read-only DB).
+- `POST /v1/retrieve`: body mirrors Phase 5 CLI (`dense_only` | `sparse_only` | `hybrid`, `top_k`, manifest pin `index_manifest_id`, `chunking_strategy`, etc.); embedding family from **server** `Settings`. Read-only DB (no new `processing_runs`).
+- `POST /v1/answer`: same retrieval parameters + `question` + `provider` (**`mock` only**, validated before DB session). Returns `mode`, `retrieval_mode`, `citations`, `citation_verification`, `metadata` (same shape as `app.generation.cli` JSON). Read-only DB.
+
+**Still not in scope:** `POST /v1/ask` (single combined endpoint), `POST /v1/evaluate`, multipart upload, streaming, external LLMs, auth.
+
+- `GET /health`: service liveness (Phase 1).
 
 ## 16. Evaluación
 

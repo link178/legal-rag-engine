@@ -89,7 +89,9 @@ def test_generation_smoke_intro_hybrid_serializable() -> None:
     if out.mode == "grounded":
         assert len(out.citations) >= 1 and out.used_citation_ids
 
-    json.dumps(answer_to_dict(out))
+    d = answer_to_dict(out)
+    assert "citation_verification" in d
+    json.dumps(d)
 
     with session_scope() as session:
         n_after = session.scalar(

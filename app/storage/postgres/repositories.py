@@ -325,6 +325,36 @@ class IndexManifestRepository:
     def get_by_id(self, manifest_id: UUID) -> IndexManifestRecord | None:
         return self._session.get(IndexManifestRecord, manifest_id)
 
+    def list_recent(
+        self,
+        *,
+        limit: int = 50,
+        offset: int = 0,
+        chunking_strategy: str | None = None,
+        embedding_provider: str | None = None,
+        embedding_model: str | None = None,
+        embedding_dimensions: int | None = None,
+        include_sparse: bool | None = None,
+        include_dense: bool | None = None,
+    ) -> list[IndexManifestRecord]:
+        """List manifests newest first, with optional family filters."""
+        stmt = select(IndexManifestRecord)
+        stmt = self._apply_manifest_family_filters(
+            stmt,
+            embedding_provider=embedding_provider,
+            embedding_model=embedding_model,
+            embedding_dimensions=embedding_dimensions,
+            chunking_strategy=chunking_strategy,
+        )
+        if include_sparse is not None:
+            stmt = stmt.where(IndexManifestRecord.include_sparse.is_(include_sparse))
+        if include_dense is not None:
+            stmt = stmt.where(IndexManifestRecord.include_dense.is_(include_dense))
+        stmt = (
+            stmt.order_by(IndexManifestRecord.created_at.desc()).limit(limit).offset(offset)
+        )
+        return list(self._session.scalars(stmt).all())
+
     def get_latest_completed(
         self,
         *,

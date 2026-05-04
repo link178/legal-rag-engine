@@ -10,11 +10,28 @@ from uuid import UUID
 from app.core.config import get_settings
 from app.generation.answerer import GroundedAnswerer
 from app.generation.context import ContextBuilder
-from app.generation.models import GroundedAnswer
+from app.generation.models import CitationVerificationResult, GroundedAnswer
 from app.generation.providers.mock import MockGenerationProvider
 from app.retrieval.errors import ManifestNotFoundError, RetrievalError
 from app.retrieval.models import RetrievalConfig
 from app.storage.postgres.session import session_scope
+
+
+def _verification_to_dict(v: CitationVerificationResult | None) -> dict[str, object] | None:
+    if v is None:
+        return None
+    return {
+        "used_citation_ids": list(v.used_citation_ids),
+        "available_citation_ids": list(v.available_citation_ids),
+        "valid_citation_ids": list(v.valid_citation_ids),
+        "invalid_citation_ids": list(v.invalid_citation_ids),
+        "unused_citation_ids": list(v.unused_citation_ids),
+        "duplicate_citation_ids": list(v.duplicate_citation_ids),
+        "citation_validity_rate": v.citation_validity_rate,
+        "has_citations": v.has_citations,
+        "has_valid_citations": v.has_valid_citations,
+        "has_invalid_citations": v.has_invalid_citations,
+    }
 
 
 def answer_to_dict(answer: GroundedAnswer) -> dict:
@@ -40,6 +57,7 @@ def answer_to_dict(answer: GroundedAnswer) -> dict:
             for c in answer.citations
         ],
         "used_citation_ids": list(answer.used_citation_ids),
+        "citation_verification": _verification_to_dict(answer.citation_verification),
         "metadata": dict(answer.metadata),
     }
 
@@ -214,6 +232,12 @@ def main(argv: list[str] | None = None) -> int:
     else:
         print(out.answer)
         print(f"\nmode: {out.mode}  insufficient_context={out.insufficient_context}")
+        cv = out.citation_verification
+        if cv is not None:
+            print(f"Citation validity: {cv.citation_validity_rate:.2f}")
+            print(f"Valid citations: {list(cv.valid_citation_ids)}")
+            print(f"Invalid citations: {list(cv.invalid_citation_ids)}")
+            print(f"Unused citations: {list(cv.unused_citation_ids)}")
         if out.citations:
             print("citations:")
             for c in out.citations[:5]:

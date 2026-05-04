@@ -8,7 +8,7 @@ from uuid import uuid4
 
 import pytest
 from app.generation.cli import answer_to_dict, main
-from app.generation.models import GroundedAnswer, GroundedCitation
+from app.generation.models import CitationVerificationResult, GroundedAnswer, GroundedCitation
 from app.retrieval.errors import ManifestNotFoundError
 
 
@@ -39,6 +39,18 @@ def _sample_answer() -> GroundedAnswer:
         score=0.25,
         text_preview="short",
     )
+    cv = CitationVerificationResult(
+        used_citation_ids=(1,),
+        available_citation_ids=(1,),
+        valid_citation_ids=(1,),
+        invalid_citation_ids=(),
+        unused_citation_ids=(),
+        duplicate_citation_ids=(),
+        citation_validity_rate=1.0,
+        has_citations=True,
+        has_valid_citations=True,
+        has_invalid_citations=False,
+    )
     return GroundedAnswer(
         question="q?",
         answer="reply [1]",
@@ -48,6 +60,7 @@ def _sample_answer() -> GroundedAnswer:
         retrieval_mode="hybrid",
         insufficient_context=False,
         metadata={"total_context_blocks": 1},
+        citation_verification=cv,
     )
 
 
@@ -56,6 +69,10 @@ def test_answer_to_dict_serializable() -> None:
     d = answer_to_dict(ga)
     s = json.dumps(d)
     assert "chunk_id" in s and isinstance(d["citations"][0]["chunk_id"], str)
+    assert "citation_verification" in d and d["citation_verification"] is not None
+    cv = d["citation_verification"]
+    assert cv["citation_validity_rate"] == 1.0
+    assert cv["has_citations"] is True
 
 
 def test_cli_json_stdout(fake_settings, capsys: pytest.CaptureFixture[str]) -> None:
@@ -69,6 +86,10 @@ def test_cli_json_stdout(fake_settings, capsys: pytest.CaptureFixture[str]) -> N
     out = json.loads(capsys.readouterr().out)
     assert out["mode"] == "grounded"
     assert out["used_citation_ids"] == [1]
+    assert "citation_verification" in out
+    cv = out["citation_verification"]
+    assert cv["valid_citation_ids"] == [1]
+    assert cv["citation_validity_rate"] == 1.0
 
 
 def test_cli_rejects_non_mock_provider(fake_settings) -> None:
@@ -102,6 +123,21 @@ def test_cli_default_mode_from_settings(fake_settings) -> None:
     assert rc == 0
     cfg = mf.call_args[0][1]
     assert cfg.mode == "sparse_only"
+
+
+def test_cli_human_stdout_shows_citation_validity(
+    fake_settings, capsys: pytest.CaptureFixture[str]
+) -> None:
+    ans = _sample_answer()
+    with patch("app.generation.cli.session_scope"):
+        with patch("app.generation.cli.GroundedAnswerer.from_session") as mf:
+            mf.return_value.answer.return_value = ans
+            with patch("app.generation.cli.get_settings", return_value=fake_settings):
+                rc = main(["hello", "--provider", "mock"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "Citation validity:" in out
+    assert "Valid citations:" in out
 
 
 def test_cli_invalid_manifest_uuid(fake_settings) -> None:

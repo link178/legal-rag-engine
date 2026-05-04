@@ -1,629 +1,779 @@
+# Fase 9 — API pipeline completion: chunk + index endpoints para legal-rag-engine
 
-Actúa como senior backend/RAG engineer especializado en grounded generation, context building, citas auditables y sistemas RAG reproducibles.
+Actúa como senior backend engineer especializado en FastAPI, RAG systems, contratos Pydantic, pipelines documentales reproducibles y APIs thin-wrapper sobre motores existentes.
 
 Estamos trabajando en el repo `legal-rag-engine`.
 
-## Contexto actual
+## Contexto del proyecto
 
-El proyecto `legal-rag-engine` es un motor RAG público, open-source, local-first, engine-first y orientado a portfolio técnico.
+`legal-rag-engine` es un motor RAG público, open-source, local-first, engine-first y orientado a portfolio técnico.
 
-No estamos construyendo todavía:
+El objetivo NO es construir todavía:
 
 - SaaS;
-- producto AI Act/compliance end-to-end;
+- plataforma AI Act/compliance end-to-end;
 - dashboard enterprise;
 - sistema multi-tenant;
-- billing/auth/SSO;
-- plataforma comercial.
+- auth/SSO;
+- billing;
+- workers async complejos;
+- background jobs;
+- producto comercial.
 
-El objetivo es construir un engine RAG serio y reusable con arquitectura limpia, trazabilidad, evaluación y baseline zero-cost.
+El objetivo es exponer de forma limpia el pipeline RAG ya construido, manteniendo la API como capa fina sobre el engine.
 
-## Estado implementado
+La API no debe duplicar lógica de ingestion, chunking, indexing, retrieval ni generation.
 
-El pipeline actual ya soporta:
+---
+
+# Estado actual
+
+El pipeline interno ya soporta:
 
 ```text
-archivo .txt/.md
-→ ingestión
-→ normalización
-→ Document
-→ chunking fixed_size / structure_aware
-→ Chunk
-→ indexing dense/sparse
+documents
+→ ingest
+→ normalize
+→ persist Document
+→ chunk
+→ persist Chunk
+→ index dense/sparse
 → manifests
-→ chunk_embeddings / sparse rows
-→ dense retrieval
-→ sparse retrieval
-→ hybrid retrieval
+→ pgvector chunk_embeddings
+→ sparse rows
+→ retrieve dense/sparse/hybrid
 → RRF
-→ RetrievedChunk[]
-→ retrieval-only evaluation
-→ Hit@k / MRR
-→ JSON/Markdown report
+→ retrieval evaluation
+→ context building
+→ grounded prompt
+→ mock generation
+→ citation extraction
+→ citation verification
+→ GroundedAnswer
 
 Fases cerradas:
 
 Fase 1: bootstrap FastAPI, config, logging, healthcheck, tooling.
 Fase 2A: dominio + persistencia base con SQLAlchemy/Alembic.
 Fase 2B: ingestión .txt / .md, normalización, checksums, CLI.
-Fase 3: chunking fixed_size y structure_aware, CLI, lineage por ProcessingRun.
+Fase 3: chunking fixed_size y structure_aware.
 Fase 4A: indexing foundations, deterministic hash embeddings, sparse tokenizer, manifests.
 Fase 4B: embeddings persistidos en chunk_embeddings con pgvector, provider local opcional sentence-transformers.
 Fase 5: retrieval dense/sparse/hybrid + RRF.
 Fase 5.5: retrieval evaluation baseline con golden questions, Hit@k y MRR.
+Fase 6: grounded generation con context builder, grounded prompt y mock provider.
+Fase 7: citation verification mecánica.
+Fase 8: API v1 mínima.
+
+Fase 8 añadió API HTTP para:
+
+GET  /health
+GET  /
+POST /v1/ingest
+GET  /v1/documents
+GET  /v1/documents/{document_id}
+POST /v1/retrieve
+POST /v1/answer
 
 QA actual reportado:
 
-pytest: 146 passed, 6 skipped
-ruff check app tests: clean
-mypy app: clean
+python -m pytest -q → 249 passed, 8 skipped
+python -m ruff check app tests → clean
+python -m mypy app → clean
+Problema que resuelve esta fase
+
+Ahora la API permite ingestar, recuperar y responder, pero todavía no permite ejecutar por HTTP los pasos intermedios:
+
+chunking
+indexing
+manifest inspection
+
+Por tanto, para operar el pipeline completo todavía hace falta CLI entre /v1/ingest y /v1/retrieve.
+
+Esta fase completa el pipeline HTTP mínimo:
+
+POST /v1/ingest
+→ POST /v1/chunk
+→ POST /v1/index
+→ GET  /v1/index-manifests
+→ POST /v1/retrieve
+→ POST /v1/answer
 Objetivo de esta fase
 
-Implementar la primera capa de generación grounded del motor.
+Implementar endpoints API v1 para:
 
-Objetivo conceptual:
+POST /v1/chunk
+POST /v1/index
+GET  /v1/index-manifests
+GET  /v1/index-manifests/{manifest_id}
 
-query
-→ RetrievalOrchestrator
-→ RetrievedChunk[]
-→ ContextBuilder
-→ grounded prompt
-→ GenerationProvider
-→ structured answer
-→ citations [1], [2]
-→ insufficient_context cuando no haya evidencia suficiente
+Opcional si es trivial y encaja con repositorios existentes:
 
-Esta fase debe transformar chunks recuperados en una respuesta estructurada y auditable.
+GET /v1/documents/{document_id}/chunks
 
-Debe mantener la filosofía del proyecto:
+La API debe seguir siendo una capa fina sobre runners/repositorios existentes.
 
-local-first;
-zero-cost baseline;
-sin LLM obligatorio;
-sin API keys obligatorias;
-deterministic/mock provider para tests;
-integración futura con LLM real como extensión opcional, no requisito;
-tests unitarios rápidos sin DB;
-integration tests solo opt-in si se añaden;
-separación limpia entre retrieval, context building, generation y citation verification futura.
+No crear endpoints async, jobs, workers ni colas.
+
+No implementar upload multipart.
+
+No implementar LLM real.
+
+No implementar Streamlit.
+
 Scope
 
-Crear módulo:
-
-app/generation/
-├─ __init__.py
-├─ models.py
-├─ context.py
-├─ prompts.py
-├─ answerer.py
-├─ cli.py
-└─ providers/
-   ├─ __init__.py
-   ├─ base.py
-   └─ mock.py
-
-Añadir tests:
-
-tests/unit/generation/
-├─ test_generation_models.py
-├─ test_context_builder.py
-├─ test_prompts.py
-├─ test_mock_provider.py
-└─ test_answerer.py
-
-Opcional si encaja sin fragilidad:
-
-tests/integration/test_generation_persist.py
-
-Actualizar documentación:
-
-docs/implementation/generation-notes.md
-docs/implementation/implementation-manual.md
-docs/README.md
-README.md
-
-No modificar endpoints FastAPI todavía salvo que exista alguna necesidad mínima de import. No implementar /v1/ask en esta fase.
-
-Requisitos funcionales
-1. Modelos de generación
-
-Crear app/generation/models.py.
-
-Definir modelos claros y serializables.
-
-Mínimos recomendados:
-
-AnswerMode
-
-Valores:
-
-grounded
-partial
-insufficient_context
-GroundedCitation
-
-Campos recomendados:
-
-citation_id: int
-chunk_id: UUID
-document_id: UUID | None
-source_path: str | None
-title: str | None
-score: float | None
-rank: int | None
-text_preview: str
-GroundedContextBlock
-
-Campos recomendados:
-
-citation_id: int
-chunk_id: UUID
-document_id: UUID | None
-source_path: str | None
-title: str | None
-rank: int
-score: float | None
-text: str
-GroundedAnswer
-
-Campos recomendados:
-
-question: str
-answer: str
-mode: AnswerMode
-citations: list[GroundedCitation]
-used_citation_ids: list[int]
-retrieval_mode: str | None
-metadata: dict[str, Any] = {}
-insufficient_context: bool
-
-Reglas:
-
-question no puede estar vacía.
-answer no puede estar vacía.
-Si mode == insufficient_context, insufficient_context debe ser True.
-Si mode == grounded, debería haber al menos una citation.
-No sobrecomplicar con confidence todavía; puede ir en metadata si ya hace falta.
-2. ContextBuilder
-
-Crear app/generation/context.py.
-
-Debe convertir RetrievedChunk[] en bloques de contexto citables.
-
-Diseño recomendado:
-
-class ContextBuilder:
-    def __init__(
-        self,
-        max_chunks: int = 5,
-        max_context_chars: int = 8000,
-        max_chunk_chars: int = 2000,
-        min_score: float | None = None,
-    ):
-        ...
-
-    def build(self, retrieved_chunks: Sequence[RetrievedChunk]) -> list[GroundedContextBlock]:
-        ...
-
-Requisitos:
-
-Mantener orden rankeado.
-Asignar citation_id empezando en 1.
-Respetar max_chunks.
-Respetar max_context_chars.
-Truncar chunks demasiado largos a max_chunk_chars.
-Preservar chunk_id, document_id, source_path, title, rank, score.
-Filtrar por min_score si se proporciona.
-No mutar los RetrievedChunk originales.
-Si no hay chunks válidos, devolver lista vacía.
-Truncamiento simple y explícito; añadir sufijo tipo ... si se recorta.
-
-Importante: esta clase no debe llamar a LLMs ni a DB. Debe ser pura y testeable.
-
-3. Prompt grounded
-
-Crear app/generation/prompts.py.
-
-Implementar una función simple:
-
-def build_grounded_prompt(question: str, context_blocks: Sequence[GroundedContextBlock]) -> str:
-    ...
-
-El prompt debe instruir al generador a:
-
-responder solo con el contexto proporcionado;
-citar usando [1], [2], etc.;
-no inventar;
-devolver una respuesta de insufficient context si el contexto no contiene la respuesta;
-mantener respuesta concisa pero útil;
-no citar fuentes que no estén en el contexto.
-
-Formato recomendado del contexto:
-
-[1]
-source: ...
-title: ...
-text:
-...
-
-[2]
-source: ...
-title: ...
-text:
-...
-
-Debe haber tests que aseguren:
-
-incluye la pregunta;
-incluye citation ids;
-incluye source/title si existen;
-no falla con metadata ausente;
-si no hay context blocks, construye prompt válido o lanza error controlado según diseño.
-
-No meter prompt engineering complejo todavía.
-
-4. GenerationProvider protocol
-
-Crear app/generation/providers/base.py.
-
-Definir protocolo:
-
-class GenerationProvider(Protocol):
-    name: str
-
-    def generate(self, prompt: str) -> str:
-        ...
-
-No introducir streaming todavía.
-
-No introducir async todavía salvo que el repo ya use async en capas equivalentes.
-
-No añadir OpenAI/Anthropic/local LLM real en esta fase.
-
-5. MockGenerationProvider
-
-Crear app/generation/providers/mock.py.
-
-Debe ser determinista y servir para tests/smoke.
-
-Diseño recomendado:
-
-class MockGenerationProvider:
-    name = "mock"
-
-    def generate(self, prompt: str) -> str:
-        ...
-
-Comportamiento aceptable:
-
-Si el prompt contiene contexto con bloques [1], [2], devolver una respuesta determinista que use las citas disponibles.
-Si no hay contexto útil, devolver una frase de insufficient context.
-No intentar semántica real.
-No depender de random.
-No depender de fecha/hora.
-No llamar APIs externas.
-
-Ejemplo de salida mock:
-
-Based on the provided context, the answer is supported by the retrieved evidence. [1]
-
-Para insufficient context:
-
-I do not have enough information in the provided context to answer this question.
-
-El objetivo no es calidad lingüística; es validar wiring y contratos.
-
-6. GroundedAnswerer
-
-Crear app/generation/answerer.py.
-
-Debe orquestar:
-
-question
-→ retrieval
-→ context builder
-→ prompt
-→ generation provider
-→ parse used citations
-→ GroundedAnswer
-
-Diseño recomendado:
-
-class GroundedAnswerer:
-    def __init__(
-        self,
-        retriever: RetrievalOrchestrator,
-        context_builder: ContextBuilder,
-        provider: GenerationProvider,
-    ):
-        ...
-
-    def answer(self, question: str) -> GroundedAnswer:
-        ...
-
-O bien aceptar configuración si el estilo actual del repo lo prefiere.
-
-Requisitos:
-
-Validar query vacía.
-Ejecutar retrieval mediante RetrievalOrchestrator.
-Construir contexto.
-Si no hay contexto, devolver GroundedAnswer con:
-mode = insufficient_context
-insufficient_context = True
-citations = []
-used_citation_ids = []
-answer clara de no suficiente contexto.
-Si hay contexto:
-construir prompt grounded;
-llamar provider;
-extraer citation ids usadas en la respuesta con regex simple \[(\d+)\];
-crear GroundedCitation[] para los context blocks;
-determinar mode:
-grounded si hay citas usadas válidas;
-partial si hay contexto pero la respuesta no usa citas o usa citas inválidas;
-insufficient_context si provider devuelve frase clara de insufficient context.
-No implementar validación semántica claim-by-claim todavía.
-No implementar citation verification avanzada todavía. Eso queda para Fase 7.
-No mutar retrieval results.
-
-Metadata útil:
-
-provider name;
-retrieval mode;
-total retrieved chunks;
-total context blocks;
-prompt chars;
-answer chars.
-7. CLI de generación
-
-Crear:
-
-app/generation/cli.py
-
-Debe permitir:
-
-python -m app.generation.cli "What is legal-rag-engine?" \
-  --mode hybrid \
-  --chunking-strategy fixed_size \
-  --top-k 5 \
-  --provider mock \
-  --json
-
-Opciones recomendadas:
-
-positional:
-  question
-
-options:
-  --mode dense|sparse|hybrid
-  --chunking-strategy fixed_size|structure_aware
-  --top-k 5
-  --manifest-id <uuid>              optional
-  --embedding-provider deterministic_hash
-  --embedding-model <model>         optional
-  --embedding-dimensions 16
-  --rrf-k 60
-  --max-context-chars 8000
-  --max-chunks 5
-  --max-chunk-chars 2000
-  --provider mock
-  --json
-
-Por ahora solo debe soportar --provider mock.
-
-Si se pasa otro provider, devolver error controlado indicando que solo mock está soportado en esta fase.
-
-La salida JSON debe incluir:
-
-question;
-answer;
-mode;
-insufficient_context;
-citations;
-used_citation_ids;
-metadata.
-
-Salida normal humana:
-
-answer;
-mode;
-citations resumidas.
-
-Debe seguir el estilo de las CLIs existentes del repo.
-
-8. Tests unitarios
-
-Añadir tests sin DB.
-
-test_generation_models.py
-
-Cubrir:
-
-GroundedAnswer válido grounded con citation.
-GroundedAnswer insufficient_context.
-question vacía falla.
-answer vacía falla.
-citation preview/truncamiento si se implementa.
-test_context_builder.py
-
-Cubrir:
-
-asigna citation ids desde 1.
-respeta orden.
-respeta max_chunks.
-respeta max_context_chars.
-trunca chunks largos.
-filtra por min_score.
-no muta input.
-devuelve lista vacía si no hay chunks.
-test_prompts.py
-
-Cubrir:
-
-prompt contiene pregunta.
-prompt contiene bloques [1], [2].
-prompt contiene source/title cuando existen.
-prompt instruye a no inventar.
-prompt instruye formato de citas.
-test_mock_provider.py
-
-Cubrir:
-
-output determinista.
-usa [1] cuando hay contexto.
-insufficient context cuando no hay contexto.
-test_answerer.py
-
-Usar fake retriever/orchestrator y mock provider.
-
-Cubrir:
-
-answer grounded cuando hay contexto y cita válida.
-insufficient_context cuando retrieval devuelve vacío.
-partial cuando provider devuelve respuesta sin citas.
-partial cuando provider usa cita inválida.
-metadata básica.
-query vacía falla.
-
-No requerir Postgres.
-
-9. Integration test opcional
-
-Si encaja sin fragilidad, añadir:
-
-tests/integration/test_generation_persist.py
-
-Debe estar gated como los demás integration tests.
-
-Flujo mínimo:
-
-ingest sample
-→ chunk
-→ index
-→ retrieval
-→ generation mock
-→ assert GroundedAnswer serializable
-→ assert mode in grounded/partial/insufficient_context
-
-No exigir calidad semántica con deterministic embeddings.
-
-10. Documentación
-
-Crear:
-
-docs/implementation/generation-notes.md
-
-Debe explicar:
-
-qué hace la Fase 6;
-diferencia entre retrieval y generation;
-qué es grounded generation;
-qué es context building;
-por qué el provider mock es intencional;
-por qué no se usa LLM obligatorio todavía;
-cómo funcionan las citas [1];
-qué significa grounded, partial, insufficient_context;
-limitaciones actuales;
-qué queda para Fase 7: citation verification.
+Actualizar o crear bajo app/api/:
+
+app/api/schemas.py
+app/api/mappers.py
+app/api/errors.py
+app/api/routes/
+   ├─ chunk.py
+   ├─ index.py
+   └─ documents.py      # solo si se añade /documents/{id}/chunks
 
 Actualizar:
 
+app/main.py
+
+Actualizar repositorios solo si hace falta algún método pequeño y bien testeado:
+
+app/storage/postgres/repositories.py
+
+Actualizar tests:
+
+tests/unit/api/
+├─ test_api_schemas.py
+├─ test_api_routes_chunk.py
+├─ test_api_routes_index.py
+└─ test_api_routes_documents.py
+
+Opcional integration test:
+
+tests/integration/test_api_pipeline_persist.py
+
+Debe estar gated por:
+
+LEGAL_RAG_RUN_INTEGRATION_DB=1
+
+Actualizar docs:
+
+docs/implementation/api-notes.md
 docs/implementation/implementation-manual.md
 docs/README.md
 README.md
 
-Añadir comandos:
+No añadir migraciones salvo necesidad real. Esta fase debería usar tablas existentes.
 
-python -m app.generation.cli "What is legal-rag-engine?" \
-  --mode hybrid \
-  --chunking-strategy fixed_size \
-  --top-k 5 \
-  --provider mock \
-  --json
+Requisitos funcionales
+1. Endpoint POST /v1/chunk
 
-Y flujo previo:
+Crear router:
 
-docker compose up -d postgres
-alembic upgrade head
+app/api/routes/chunk.py
 
-python -m app.ingestion.cli data/sample_corpus/basic/intro.md --persist --json
-python -m app.chunking.cli <document_uuid> --strategy fixed_size --json
-python -m app.indexing.cli --chunking-strategy fixed_size --json
-python -m app.generation.cli "What is legal-rag-engine?" --mode hybrid --chunking-strategy fixed_size --top-k 5 --provider mock --json
+Endpoint:
+
+POST /v1/chunk
+
+Debe envolver el runner/servicio existente de chunking.
+
+Request
+
+Añadir en app/api/schemas.py:
+
+ChunkRequest
+
+Campos recomendados:
+
+document_id: UUID
+strategy: Literal["fixed_size", "structure_aware"] = "fixed_size"
+chunk_size: int | None = None
+chunk_overlap: int | None = None
+persist: bool = True
+force: bool = False
+
+Ajusta nombres/campos a la configuración real del chunking actual.
+
+Validaciones:
+
+document_id obligatorio
+strategy válida
+chunk_size > 0 si se proporciona
+chunk_overlap >= 0 si se proporciona
+chunk_overlap < chunk_size si ambos existen
+persist debe ser true si el runner API necesita persistencia para pasos posteriores
+
+Si el sistema actual tiene defaults propios para chunking, no duplicar defaults de forma inconsistente.
+
+Response
+
+Añadir:
+
+ChunkResponse
+ChunkItemResponse
+
+Campos recomendados:
+
+document_id: UUID
+processing_run_id: UUID | None
+strategy: str
+config_hash: str | None
+created: bool | None
+skipped: bool | None
+chunks_count: int
+chunks: list[ChunkItemResponse]
+metadata: dict[str, Any]
+
+ChunkItemResponse:
+
+chunk_id: UUID
+document_id: UUID
+chunk_index: int
+text: str
+checksum: str | None
+metadata: dict[str, Any]
+
+Si devolver todos los chunks puede ser excesivo, añade:
+
+include_chunks: bool = True
+
+o limita respuesta a summary + primeros N. Para esta fase, con corpus pequeño, puede devolverlos, pero mantén diseño razonable.
+
+Comportamiento
+Busca el documento por document_id.
+Si no existe, devolver 404.
+Ejecuta chunking con estrategia/config.
+Persiste por defecto.
+Respeta idempotencia existente:
+si ya existen chunks para misma estrategia/config, devolver skipped/summary si el runner lo soporta.
+No indexar automáticamente.
+No crear lógica de chunking en el router.
+No modificar ingestion.
+
+Ejemplo request:
+
+{
+  "document_id": "00000000-0000-0000-0000-000000000000",
+  "strategy": "fixed_size",
+  "chunk_size": 1000,
+  "chunk_overlap": 150,
+  "persist": true
+}
+
+Ejemplo response:
+
+{
+  "document_id": "00000000-0000-0000-0000-000000000000",
+  "processing_run_id": "11111111-1111-1111-1111-111111111111",
+  "strategy": "fixed_size",
+  "config_hash": "abc123",
+  "created": true,
+  "skipped": false,
+  "chunks_count": 3,
+  "chunks": [
+    {
+      "chunk_id": "22222222-2222-2222-2222-222222222222",
+      "document_id": "00000000-0000-0000-0000-000000000000",
+      "chunk_index": 0,
+      "text": "...",
+      "checksum": "...",
+      "metadata": {}
+    }
+  ],
+  "metadata": {}
+}
+2. Optional GET /v1/documents/{document_id}/chunks
+
+Añadir solo si es trivial con repositorios existentes.
+
+Endpoint:
+
+GET /v1/documents/{document_id}/chunks
+
+Query params:
+
+strategy=fixed_size optional
+limit=100 optional
+
+Response:
+
+DocumentChunksResponse
+
+Campos:
+
+document_id: UUID
+count: int
+chunks: list[ChunkItemResponse]
+
+Validaciones:
+
+limit entre 1 y 500
+document no existe → 404
+
+Si añadirlo implica demasiado cambio de repositorio, omitirlo y documentar que queda pendiente.
+
+3. Endpoint POST /v1/index
+
+Crear router:
+
+app/api/routes/index.py
+
+Endpoint:
+
+POST /v1/index
+
+Debe envolver el runner existente de indexing.
+
+Request
+
+Añadir:
+
+IndexRequest
+
+Campos recomendados:
+
+chunking_strategy: str = "fixed_size"
+include_dense: bool = True
+include_sparse: bool = True
+embedding_provider: str = "deterministic_hash"
+embedding_model: str | None = None
+embedding_dimensions: int = 16
+force_reindex: bool = False
+
+Si el código actual usa nombres distintos, alinear con IndexingConfig real.
+
+Validaciones:
+
+al menos uno de include_dense/include_sparse debe ser true
+embedding_dimensions > 0
+embedding_provider no vacío
+si embedding_provider == deterministic_hash, embedding_dimensions debe estar presente
+si embedding_provider == local_sentence_transformers, embedding_model debería estar presente o resolverse con default existente
+
+No instalar ni descargar sentence-transformers desde API. Si el provider local no está instalado y se solicita, devolver error controlado.
+
+Response
+
+Añadir:
+
+IndexResponse
+
+Campos recomendados:
+
+manifest_id: UUID | None
+manifest_hash: str | None
+config_hash: str | None
+chunk_set_hash: str | None
+chunking_strategy: str
+include_dense: bool
+include_sparse: bool
+embedding_provider: str
+embedding_model: str | None
+embedding_dimensions: int
+embeddings_persisted: bool
+indexed_chunks_count: int
+processing_run_id: UUID | None
+created: bool | None
+skipped: bool | None
+metadata: dict[str, Any]
+
+Ajustar al resultado real de app.indexing.runner.
+
+Comportamiento
+Ejecuta indexing sobre chunks persistidos.
+No ingesta ni chunkea automáticamente.
+Si no hay chunks para la estrategia, devolver error controlado:
+404 si se trata como recurso no encontrado.
+400 si se trata como estado inválido del pipeline.
+Respeta idempotencia existente por manifest/config.
+No crear ProcessingRun manualmente en router; usar runner existente.
+No reimplementar embedding provider factory.
+No modificar retrieval.
+
+Ejemplo request:
+
+{
+  "chunking_strategy": "fixed_size",
+  "include_dense": true,
+  "include_sparse": true,
+  "embedding_provider": "deterministic_hash",
+  "embedding_dimensions": 16
+}
+
+Ejemplo response:
+
+{
+  "manifest_id": "33333333-3333-3333-3333-333333333333",
+  "manifest_hash": "abc123",
+  "config_hash": "def456",
+  "chunk_set_hash": "ghi789",
+  "chunking_strategy": "fixed_size",
+  "include_dense": true,
+  "include_sparse": true,
+  "embedding_provider": "deterministic_hash",
+  "embedding_model": null,
+  "embedding_dimensions": 16,
+  "embeddings_persisted": true,
+  "indexed_chunks_count": 3,
+  "processing_run_id": "44444444-4444-4444-4444-444444444444",
+  "created": true,
+  "skipped": false,
+  "metadata": {}
+}
+4. Endpoint GET /v1/index-manifests
+
+Endpoint:
+
+GET /v1/index-manifests
+
+Debe listar manifests.
+
+Query params
+limit=50
+chunking_strategy optional
+include_sparse optional
+include_dense optional
+embedding_provider optional
+
+Mantén filtros simples. Si los repositorios actuales no soportan filtros, implementa solo limit y deja filtros para futuro.
+
+Response
+
+Añadir:
+
+IndexManifestListResponse
+IndexManifestItemResponse
+
+Campos recomendados:
+
+manifests: list[IndexManifestItemResponse]
+count: int
+
+IndexManifestItemResponse:
+
+manifest_id: UUID
+manifest_hash: str
+config_hash: str
+chunk_set_hash: str
+chunking_strategy: str
+include_dense: bool
+include_sparse: bool
+embedding_provider: str
+embedding_model: str | None
+embedding_dimensions: int
+embeddings_persisted: bool
+created_at: datetime | None
+metadata: dict[str, Any]
+
+Ajustar a columnas reales.
+
+Comportamiento
+Ordenar más recientes primero si existe created_at.
+No devolver embeddings.
+No devolver chunks salvo que ya exista relación clara y ligera.
+5. Endpoint GET /v1/index-manifests/{manifest_id}
+
+Endpoint:
+
+GET /v1/index-manifests/{manifest_id}
+
+Debe devolver detalle del manifest.
+
+Response puede reutilizar IndexManifestItemResponse, añadiendo:
+
+indexed_chunks_count: int | None
+
+Si contar chunks es trivial con repositorio existente, hacerlo. Si no, omitir o dejar null.
+
+404 si no existe.
+
+6. API mappers
+
+Actualizar app/api/mappers.py.
+
+Añadir funciones puras para convertir objetos internos a schemas:
+
+chunk_result_to_response(...)
+chunk_record_to_response(...)
+index_result_to_response(...)
+index_manifest_record_to_response(...)
+
+No montar lógica de negocio en mappers.
+
+No hacer queries DB dentro de mappers si se puede evitar. Si necesitas counts, resolver antes en router/repo.
+
+7. Error handling
+
+Actualizar app/api/errors.py.
+
+Mapear errores relevantes de chunking/indexing.
+
+Recomendado:
+
+ChunkingError                         → 400
+DocumentNotFound / missing document   → 404
+IndexingError                         → 400
+ManifestNotFoundError                 → 404
+EmbeddingDimensionMismatchError       → 400
+Unsupported/Provider import error     → 400
+ValueError controlado                 → 400
+Unexpected                            → 500
+
+Si existen clases específicas en app/chunking/errors.py o app/indexing/errors.py, mapearlas explícitamente.
+
+No exponer stack traces.
+
+8. App registration
+
+Actualizar app/main.py.
+
+Registrar routers:
+
+app.include_router(chunk.router, prefix="/v1", tags=["chunk"])
+app.include_router(index.router, prefix="/v1", tags=["index"])
+
+Mantener funcionando:
+
+GET /
+GET /health
+POST /v1/ingest
+GET /v1/documents
+GET /v1/documents/{document_id}
+POST /v1/retrieve
+POST /v1/answer
+
+No romper rutas existentes.
+
+9. Tests unitarios
+
+Todos los tests unitarios deben funcionar sin Postgres real.
+
+Usar TestClient, dependency overrides y monkeypatch.
+
+test_api_schemas.py
+
+Añadir tests para:
+
+ChunkRequest válido.
+ChunkRequest falla si overlap >= size.
+ChunkRequest falla si strategy inválida.
+IndexRequest válido.
+IndexRequest falla si include_dense=false e include_sparse=false.
+IndexRequest falla si embedding_dimensions <= 0.
+IndexManifest response serializa bien.
+test_api_routes_chunk.py
+
+Cubrir:
+
+POST /v1/chunk devuelve 200 con response shape.
+POST /v1/chunk document not found devuelve 404.
+POST /v1/chunk validation error devuelve 422 o 400 según FastAPI/schema.
+POST /v1/chunk no indexa automáticamente.
+GET /v1/documents/{document_id}/chunks si se implementa.
+
+No requerir DB: usar fake session + monkeypatch del runner/repo.
+
+test_api_routes_index.py
+
+Cubrir:
+
+POST /v1/index devuelve 200 con manifest response.
+POST /v1/index sin chunks devuelve 400/404 controlado.
+POST /v1/index provider error devuelve 400.
+GET /v1/index-manifests devuelve lista.
+GET /v1/index-manifests/{id} devuelve detalle.
+GET /v1/index-manifests/{id} no existente devuelve 404.
+
+No requerir DB.
+
+Regression tests
+
+Asegurar que siguen pasando route tests existentes:
+
+/v1/ingest
+/v1/documents
+/v1/retrieve
+/v1/answer
+/health
+/
+10. Integration test opcional
+
+Si encaja limpio, añadir:
+
+tests/integration/test_api_pipeline_persist.py
+
+Gated por:
+
+LEGAL_RAG_RUN_INTEGRATION_DB=1
+
+Flujo mínimo:
+
+POST /v1/ingest
+→ POST /v1/chunk
+→ POST /v1/index
+→ GET /v1/index-manifests
+→ POST /v1/retrieve
+→ POST /v1/answer
+
+Assertions:
+
+ingest devuelve document_id
+chunk devuelve chunks_count >= 1
+index devuelve manifest_id o manifest_hash
+retrieve devuelve JSON shape válido
+answer devuelve citation_verification
+
+No exigir calidad semántica con deterministic embeddings.
+
+No depender de orden frágil salvo que esté garantizado.
+
+11. Documentación
+
+Actualizar:
+
+docs/implementation/api-notes.md
+
+Añadir sección:
+
+## Pipeline endpoints
+
+Explicar que el flujo HTTP mínimo ahora es:
+
+/v1/ingest
+→ /v1/chunk
+→ /v1/index
+→ /v1/retrieve
+→ /v1/answer
+
+Añadir ejemplos curl.
+
+POST /v1/chunk
+curl -X POST http://localhost:8000/v1/chunk \
+  -H "Content-Type: application/json" \
+  -d '{
+    "document_id":"<document_id>",
+    "strategy":"fixed_size",
+    "chunk_size":1000,
+    "chunk_overlap":150,
+    "persist":true
+  }'
+POST /v1/index
+curl -X POST http://localhost:8000/v1/index \
+  -H "Content-Type: application/json" \
+  -d '{
+    "chunking_strategy":"fixed_size",
+    "include_dense":true,
+    "include_sparse":true,
+    "embedding_provider":"deterministic_hash",
+    "embedding_dimensions":16
+  }'
+GET /v1/index-manifests
+curl http://localhost:8000/v1/index-manifests
+GET /v1/index-manifests/{manifest_id}
+curl http://localhost:8000/v1/index-manifests/<manifest_id>
+
+Actualizar también:
+
+README.md
+docs/README.md
+docs/implementation/implementation-manual.md
+
+Dejar explícito:
+
+No upload multipart yet.
+No async jobs yet.
+No auth/multi-tenant.
+No LLM real.
+No /v1/ask.
 Constraints importantes
 
 No hacer:
 
 No implementar /v1/ask.
-No modificar FastAPI salvo necesidad mínima.
+No implementar upload multipart.
+No implementar URL ingestion.
+No implementar background jobs.
+No implementar async workers.
 No implementar Streamlit.
 No implementar OpenAI.
 No implementar Anthropic.
-No implementar Ollama/local LLM real todavía.
+No implementar Ollama.
 No añadir API keys.
-No añadir dependencias cloud.
+No llamar LLM externo.
 No añadir Qdrant.
 No añadir Redis.
-No implementar reranking.
-No implementar claim-level verification.
-No implementar citation verification avanzada.
-No implementar evaluation generation completa.
-No meter PDF/HTML/OCR.
-No añadir usuarios/auth/billing.
-No convertir esto en producto compliance.
+No añadir auth.
+No añadir users.
+No añadir billing.
+No añadir multi-tenant.
+No persistir generation runs.
+No crear ProcessingRun manualmente en routers.
+No duplicar lógica de engine dentro de routers.
+No añadir migrations salvo necesidad real.
+No romper CLIs existentes.
+No romper endpoints de Fase 8.
 
 Mantener:
 
-local-first;
-zero-cost baseline;
-tests unitarios sin DB;
-integration tests opt-in;
-typing fuerte;
-ruff clean;
-mypy clean;
-CLI coherente;
-docs claras;
+API como thin wrapper.
+local-first.
+zero-cost baseline.
+deterministic behavior.
+Pydantic v2.
+tests unitarios sin DB.
+integration tests opt-in.
+typing fuerte.
+ruff clean.
+mypy clean.
+docs claras.
 separación de capas.
 Criterios de aceptación
 
 La fase se considera completa si:
 
-Existe módulo app/generation.
-Existe ContextBuilder.
-Existe build_grounded_prompt.
-Existe GenerationProvider protocol.
-Existe MockGenerationProvider.
-Existe GroundedAnswerer.
-Existe CLI python -m app.generation.cli.
-La CLI soporta provider mock.
-La CLI devuelve JSON serializable.
-Hay modelo de answer con citations.
-Hay modo grounded.
-Hay modo partial.
-Hay modo insufficient_context.
-Se extraen citation ids con regex simple.
-Si no hay contexto, no se inventa respuesta.
-No se llama ningún LLM externo.
-No se requieren API keys.
-Tests unitarios cubren modelos, context, prompts, provider y answerer.
+GET /health sigue funcionando.
+GET / sigue funcionando.
+Endpoints de Fase 8 siguen funcionando.
+Existe POST /v1/chunk.
+Existe POST /v1/index.
+Existe GET /v1/index-manifests.
+Existe GET /v1/index-manifests/{manifest_id}.
+Opcionalmente existe GET /v1/documents/{document_id}/chunks.
+/v1/chunk envuelve el runner/servicio de chunking existente.
+/v1/index envuelve el runner de indexing existente.
+/v1/index-manifests no devuelve embeddings.
+No se crea lógica de chunking/indexing dentro de routers.
+No se crean ProcessingRuns manualmente en routers.
+No se implementa /v1/ask.
+No se implementan jobs/colas.
+No se añaden dependencias cloud.
+No se llama LLM externo.
+Schemas Pydantic validan inputs.
+Errores comunes se traducen a JSON controlado.
+Tests unitarios cubren schemas y rutas nuevas.
+Tests unitarios no requieren Postgres.
 Integration test, si existe, está gated.
-Documentación actualizada.
-pytest pasa.
-ruff check app tests pasa.
-mypy app pasa.
+Documentación API actualizada.
+README actualizado.
+CLIs existentes siguen funcionando.
+python -m pytest -q pasa.
+python -m ruff check app tests pasa.
+python -m mypy app pasa.
 Resultado esperado al terminar
 
 Devuelve un resumen con:
 
 archivos creados;
 archivos modificados;
-comandos para probar;
-tests añadidos;
+endpoints añadidos;
+tests añadidos/modificados;
+comandos curl para probar el pipeline HTTP completo;
 limitaciones conocidas;
 output de:
-pytest
-ruff check app tests
-mypy app
+python -m pytest -q
+python -m ruff check app tests
+python -m mypy app
 
 No hagas cambios fuera de scope.
