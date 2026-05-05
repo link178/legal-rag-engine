@@ -62,6 +62,70 @@ def test_answer_request_provider_default() -> None:
     assert a.provider == "mock"
 
 
+def test_retrieve_request_metadata_filter_partial() -> None:
+    r = RetrieveRequest(
+        query="q",
+        metadata_filter={"jurisdiction": "eu", "legal_document_type": "regulation"},
+    )
+    assert r.metadata_filter is not None
+    assert r.metadata_filter.jurisdiction == "eu"
+    assert r.metadata_filter.legal_document_type == "regulation"
+
+
+def test_retrieve_request_metadata_filter_strips_whitespace() -> None:
+    r = RetrieveRequest(query="q", metadata_filter={"jurisdiction": "  eu  "})
+    assert r.metadata_filter is not None
+    assert r.metadata_filter.jurisdiction == "eu"
+
+
+def test_retrieve_request_metadata_filter_empty_subobject() -> None:
+    r = RetrieveRequest(query="q", metadata_filter={})
+    assert r.metadata_filter is not None
+    assert r.metadata_filter.jurisdiction is None
+
+
+def test_retrieve_request_metadata_filter_unknown_nested_key() -> None:
+    with pytest.raises(ValidationError):
+        RetrieveRequest(query="q", metadata_filter={"not_a_field": "x"})  # type: ignore[arg-type]
+
+
+def test_answer_request_metadata_filter() -> None:
+    a = AnswerRequest(question="q?", metadata_filter={"language": "en"})
+    assert a.metadata_filter is not None
+    assert a.metadata_filter.language == "en"
+
+
+def test_retrieval_config_from_params_maps_metadata_filter() -> None:
+    from app.api.retrieval_config import retrieval_config_from_params
+
+    class _S:
+        embedding_provider = "deterministic_hash"
+        embedding_dimensions = 16
+        embedding_model = ""
+
+    p = RetrieveRequest(
+        query="q",
+        metadata_filter={"jurisdiction": "eu"},
+    )
+    cfg = retrieval_config_from_params(p, _S())  # type: ignore[arg-type]
+    assert cfg.metadata_filter is not None
+    assert cfg.metadata_filter.jurisdiction == "eu"
+    assert cfg.metadata_filter.as_dict() == {"jurisdiction": "eu"}
+
+
+def test_retrieval_config_from_params_empty_metadata_filter_object() -> None:
+    from app.api.retrieval_config import retrieval_config_from_params
+
+    class _S:
+        embedding_provider = "deterministic_hash"
+        embedding_dimensions = 16
+        embedding_model = ""
+
+    p = RetrieveRequest(query="q", metadata_filter={})
+    cfg = retrieval_config_from_params(p, _S())  # type: ignore[arg-type]
+    assert cfg.metadata_filter is None
+
+
 def test_ingest_request_path_required() -> None:
     with pytest.raises(ValidationError):
         IngestRequest(path="")

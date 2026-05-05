@@ -219,6 +219,7 @@ __marimo__/
 
 # Legal RAG Engine — local runtime data and logs
 logs/
+reports/
 *.sqlite
 *.sqlite-journal
 data/local/

@@ -13,6 +13,10 @@ def infer_source_type(path: Path) -> str:
         return "text"
     if ext in (".md", ".markdown"):
         return "markdown"
+    if ext in (".html", ".htm"):
+        return "html"
+    if ext == ".pdf":
+        return "pdf"
     return "unknown"
 
 

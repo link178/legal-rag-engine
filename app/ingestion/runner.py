@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
+from uuid import UUID
 
 from app.domain.models import Document, ProcessingRun
 from app.ingestion.errors import IngestionError
@@ -27,6 +30,8 @@ def ingest_file_persisted(
     ingestion_service: IngestionService,
     *,
     database_url: str | None = None,
+    extra_metadata: Mapping[str, Any] | None = None,
+    corpus_run_id: UUID | None = None,
 ) -> IngestionRunResult:
     """Ingest one file inside a DB transaction; record ``ProcessingRun`` and optional ``Document``.
 
@@ -34,11 +39,14 @@ def ingest_file_persisted(
     New rows set ``Document.created_by_run_id`` to the run that created them.
     """
     now = datetime.now(UTC)
+    run_meta: dict[str, Any] = {"source": "ingestion.runner"}
+    if corpus_run_id is not None:
+        run_meta["corpus_run_id"] = str(corpus_run_id)
     run_domain = ProcessingRun(
         run_type="ingest",
         status="running",
         started_at=now,
-        metadata={"source": "ingestion.runner"},
+        metadata=run_meta,
     )
     try:
         with session_scope(database_url) as session:
@@ -49,7 +57,7 @@ def ingest_file_persisted(
             assert run_id is not None
 
             try:
-                doc = ingestion_service.ingest_file(path)
+                doc = ingestion_service.ingest_file(path, extra_metadata=extra_metadata)
             except IngestionError as e:
                 run_repo.mark_failed(
                     run_id,

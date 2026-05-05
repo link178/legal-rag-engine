@@ -21,6 +21,7 @@ There is **no** `POST /v1/ask`, **no** OpenAI/Ollama, **no** streaming, **no** n
 - Uses the **same Postgres read path** as `app.retrieval.cli`: pin or auto-resolve one `IndexManifestRecord` via `resolve_manifest_record`, then `RetrievalOrchestrator` with `DenseRetriever` + `SparseRetriever`.
 - **No new `processing_runs` rows** are created for generation (run_type `generation` remains unused; Phase 5/5.5 read-only invariant extends here). Ingest / chunk / index remain the write-side traces.
 - `GroundedAnswer.metadata` echoes `index_manifest_id`, `manifest_hash`, embedding family, retrieval mode, context builder counts, prompt/answer char counts, plus `citation_validity_rate` and `has_invalid_citations` for operator traceability.
+- **Phase 14:** when `RetrievalConfig.metadata_filter` is non-empty, `GroundedAnswer.metadata` also includes `metadata_filter` (same key/value map as retrieval). Generation CLI accepts the shared `--filter-*` flags (`app/retrieval/filter_cli.py`).
 
 ## Context builder
 

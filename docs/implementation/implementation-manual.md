@@ -435,3 +435,38 @@ Este manual implementa solo el **engine público**.
 Quedan fuera: taxonomía AI Act propietaria, motor de impacto regulatorio, scoring regulatorio comercial, evidence packs premium, workflows multi-tenant, usuarios/organizaciones, billing, SSO, conectores enterprise, dashboards comerciales y due diligence avanzada.
 
 Una futura capa privada podría reutilizar el engine, pero debe vivir fuera de la baseline pública.
+
+## Phase status digest (README archive)
+
+The following phase notes were moved from the root `README.md` during the v0.1.0 portfolio polish; they summarize shipped milestones **1–14** as of the public baseline.
+
+**Phase 1 — technical bootstrap.** The repo has a runnable FastAPI app with `/health`, centralized settings, logging, and local PostgreSQL + pgvector via Docker Compose.
+
+**Phase 2A — persistence foundation.** Domain models (`Document`, `Chunk`, `ProcessingRun`), SQLAlchemy mappings, Alembic migrations for `documents`, `chunks`, and `processing_runs`, and session/repository helpers live under `app/domain/` and `app/storage/postgres/`.
+
+**Phase 2B — basic document ingestion.** `.txt` and Markdown (`.md`, `.markdown`) load into the domain `Document` via `app/ingestion/` (normalization + checksums). **Phase 12** adds `.html`, `.htm`, and `.pdf` (BeautifulSoup + `pypdf`, no OCR). Operators can run `python -m app.ingestion.cli <file>`; optional `--persist` writes `documents` and `processing_runs` when Postgres is migrated. **Phase 8** adds `POST /v1/ingest` as a thin HTTP wrapper over the same pipeline (see [API notes](api-notes.md)).
+
+**Phase 13 — legal corpus adapter (`legalize-*`).** Recursive discovery + corpus metadata + optional scalar Markdown frontmatter (no PyYAML). Operator CLI `python -m app.ingestion.adapters.legal_corpus.cli <corpus_dir>` with `--persist`, `--json`, `--markdown-report`, `--limit`, `--fail-fast`. Umbrella trace row `processing_runs.run_type="corpus_import"` links per-file ingest runs via `metadata_json.corpus_run_id`. Sample tree: `data/sample_corpus/legalize_sample/`. See [legal-corpus-notes.md](legal-corpus-notes.md). **No** corpus HTTP endpoint in this phase.
+
+**Phase 3 — chunking.** Fixed-size and Markdown structure-aware strategies produce traceable domain `Chunk` rows. Optional Postgres persistence stores `chunks` with `created_by_run_id` and records a `processing_runs` row with `run_type="chunking"`. Operators run `python -m app.chunking.cli <document_uuid> --strategy fixed_size|structure_aware` or **`POST /v1/chunk`** (Phase 9). **Phase 10** adds a minimal Streamlit demo under `app/ui/` that drives the same HTTP API.
+
+**Phase 4A — indexing foundations.** Deterministic pseudo-embeddings (no model downloads), sparse term-frequency maps, and manifest tables `index_manifests` / `index_manifest_chunks` trace indexing runs.
+
+**Phase 4B — dense storage.** Vectors persist in **`chunk_embeddings`** (pgvector). Default provider **`deterministic_hash`**; optional **`local_sentence_transformers`** via `pip install -e ".[local-embeddings]"`. Operators run `python -m app.indexing.cli` after migrate + ingest + chunk (see [indexing-notes.md](indexing-notes.md)) or **`POST /v1/index`** (Phase 9).
+
+**Phase 5 — retrieval.** Dense (pgvector L2), baseline lexical sparse over persisted term maps, hybrid with **RRF**, and operator CLI `python -m app.retrieval.cli`. **Phase 8** adds `POST /v1/retrieve` (read-only). See [retrieval-notes.md](retrieval-notes.md). ANN indexes, Postgres FTS, and reranking remain optional/future; **Phase 10** adds a minimal Streamlit demo over the same API contract.
+
+**Phase 14 — metadata-aware retrieval filters.** Optional exact-match AND filters on `documents.metadata_json` (seven fields); shared `--filter-*` flags for retrieval, generation, and evaluation CLIs; echoed in API `metadata`, `GroundedAnswer.metadata`, and eval reports. Per-question filter in golden JSONL is deferred. See [retrieval-notes.md](retrieval-notes.md).
+
+**Phase 5.5 — retrieval evaluation baseline.** Golden JSONL (e.g. `data/eval/retrieval_golden.jsonl`), Hit@k / MRR grading, JSON and optional Markdown reports, operator CLI `python -m app.evaluation.cli` (read-only DB; no new `processing_runs`). See [evaluation-notes.md](evaluation-notes.md).
+
+**Phase 11 — answer evaluation (mock E2E).** Golden JSONL `data/eval/answer_golden.jsonl`, deterministic checks over `GroundedAnswerer` output (`python -m app.evaluation.cli answer ...`, same read-only DB invariants). See [evaluation-notes.md](evaluation-notes.md).
+
+**Phase 6 — grounded generation (mock).** `ContextBuilder`, grounded prompt assembly, `GenerationProvider` protocol, `MockGenerationProvider`, `GroundedAnswerer.from_session`, and operator CLI `python -m app.generation.cli` (requires ingest + chunk + index; read-only DB). **Phase 8** adds `POST /v1/answer` (mock only). See [generation-notes.md](generation-notes.md).
+
+**Phase 7 — mechanical citation verification.** `verify_citations`, `CitationVerificationResult`, verification in `GroundedAnswerer`, and `citation_verification` in CLI JSON / HTTP answer response (same ingest/index prerequisites). Semantic claim verification remains future work; **Phase 10** ships a minimal Streamlit API demo only.
+
+**Phase 8 — API v1 (thin).** FastAPI routes under `/v1`: ingest, documents list/detail, retrieve, answer. Embedding family defaults from `Settings` (like CLIs). **Phase 9** adds chunk, index, manifests, and optional `GET …/documents/{id}/chunks`. **No** `/v1/ask`, **no** multipart upload, **no** auth. See [api-notes.md](api-notes.md).
+
+**Phase 10 — Streamlit demo (HTTP-only).** Minimal operator UI in `app/ui/streamlit_app.py`: calls `/health` and `/v1/*` via `httpx` (mock generation only on `/v1/answer`). Install `pip install -e ".[demo]"` (or `".[dev,demo]"`). See [demo-notes.md](demo-notes.md).
+

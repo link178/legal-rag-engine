@@ -21,6 +21,21 @@ def client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
     return TestClient(app)
 
 
+def test_ingest_persist_false_html_happy(client: TestClient, tmp_path: Path) -> None:
+    p = tmp_path / "ing.html"
+    p.write_text(
+        "<html><head><title>API HTML</title></head><body><p>via api</p></body></html>",
+        encoding="utf-8",
+    )
+    r = client.post("/v1/ingest", json={"path": str(p), "persist": False})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["source_type"] == "html"
+    assert body["metadata"].get("format") == "html"
+    assert body["checksum"]
+    assert body["title"] == "API HTML"
+
+
 def test_ingest_missing_path_404(client: TestClient) -> None:
     r = client.post("/v1/ingest", json={"path": str(Path("/nonexistent/file_xyz.md"))})
     assert r.status_code == 404

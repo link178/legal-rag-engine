@@ -19,9 +19,23 @@ def test_ingest_file_returns_document(tmp_path) -> None:
     assert "file_checksum_sha256" in doc.metadata
 
 
+def test_ingest_html_returns_document(tmp_path) -> None:
+    p = tmp_path / "p.html"
+    p.write_text(
+        "<html><head><title>Z</title></head><body><p>content</p></body></html>",
+        encoding="utf-8",
+    )
+    svc = default_ingestion_service()
+    doc = svc.ingest_file(p)
+    assert doc.source_type == "html"
+    assert doc.metadata.get("format") == "html"
+    assert doc.normalized_text
+    assert "content" in doc.normalized_text
+
+
 def test_ingest_rejects_unsupported_extension(tmp_path) -> None:
-    p = tmp_path / "x.pdf"
-    p.write_bytes(b"%PDF")
+    p = tmp_path / "x.docx"
+    p.write_bytes(b"PK\x03\x04")
     svc = default_ingestion_service()
     with pytest.raises(UnsupportedDocumentTypeError):
         svc.ingest_file(p)

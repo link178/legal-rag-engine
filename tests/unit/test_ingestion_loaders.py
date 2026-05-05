@@ -38,3 +38,32 @@ def test_loader_invalid_utf8(tmp_path) -> None:
     p.write_bytes(b"\xff\xfe\x00")
     with pytest.raises(DocumentLoadError):
         TextLoader().load(p)
+
+
+def test_default_ingestion_service_resolves_new_extensions(tmp_path) -> None:
+    from pathlib import Path
+
+    from app.ingestion.services import default_ingestion_service
+
+    fixture_pdf = Path(__file__).resolve().parent.parent / "fixtures" / "sample.pdf"
+
+    svc = default_ingestion_service()
+    h = tmp_path / "x.html"
+    h.write_text("<html><body><p>h</p></body></html>", encoding="utf-8")
+    assert svc.ingest_file(h).source_type == "html"
+
+    hm = tmp_path / "y.htm"
+    hm.write_text("<html><body><p>j</p></body></html>", encoding="utf-8")
+    assert svc.ingest_file(hm).source_type == "html"
+
+    assert svc.ingest_file(fixture_pdf).source_type == "pdf"
+
+
+def test_default_ingestion_service_rejects_docx(tmp_path) -> None:
+    from app.ingestion.errors import UnsupportedDocumentTypeError
+    from app.ingestion.services import default_ingestion_service
+
+    p = tmp_path / "nope.docx"
+    p.write_bytes(b"x")
+    with pytest.raises(UnsupportedDocumentTypeError):
+        default_ingestion_service().ingest_file(p)
