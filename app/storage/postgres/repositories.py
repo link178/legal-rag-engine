@@ -10,6 +10,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.domain.models import Chunk, Document, ProcessingRun
+from app.retrieval.models import RetrievalMetadataFilter
 from app.storage.postgres.models import (
     ChunkEmbeddingRecord,
     ChunkRecord,
@@ -22,6 +23,18 @@ from app.storage.postgres.models import (
 
 def _utc_now() -> datetime:
     return datetime.now(UTC)
+
+
+def _apply_document_metadata_filter(
+    stmt,
+    metadata_filter: RetrievalMetadataFilter | None,
+):
+    """AND exact JSONB key/value matches on ``DocumentRecord.metadata_json``."""
+    if metadata_filter is None or metadata_filter.is_empty():
+        return stmt
+    for key, val in metadata_filter.as_dict().items():
+        stmt = stmt.where(DocumentRecord.metadata_json.contains({key: val}))
+    return stmt
 
 
 class DocumentRepository:
@@ -419,7 +432,10 @@ class IndexManifestRepository:
         return stmt
 
     def list_sparse_chunk_rows(
-        self, manifest_id: UUID
+        self,
+        manifest_id: UUID,
+        *,
+        metadata_filter: RetrievalMetadataFilter | None = None,
     ) -> list[tuple[ChunkRecord, DocumentRecord, dict[str, int]]]:
         """Chunks with ``sparse_indexed`` and non-null term JSON for this manifest."""
         stmt = (
@@ -432,6 +448,7 @@ class IndexManifestRepository:
                 IndexManifestChunkRecord.sparse_terms_json.isnot(None),
             )
         )
+        stmt = _apply_document_metadata_filter(stmt, metadata_filter)
         out: list[tuple[ChunkRecord, DocumentRecord, dict[str, int]]] = []
         for chunk_row, doc_row, raw_terms in self._session.execute(stmt).all():
             if not isinstance(raw_terms, dict):
@@ -589,6 +606,7 @@ class ChunkEmbeddingRepository:
         index_manifest_id: UUID,
         query_vector: list[float],
         limit: int,
+        metadata_filter: RetrievalMetadataFilter | None = None,
     ) -> list[tuple[ChunkRecord, DocumentRecord, float]]:
         """Top-``limit`` chunks by embedding L2 distance (pgvector ``<->``), ascending."""
         dist_expr = ChunkEmbeddingRecord.embedding.l2_distance(query_vector)
@@ -597,8 +615,8 @@ class ChunkEmbeddingRepository:
             .join(ChunkEmbeddingRecord, ChunkEmbeddingRecord.chunk_id == ChunkRecord.id)
             .join(DocumentRecord, DocumentRecord.id == ChunkRecord.document_id)
             .where(ChunkEmbeddingRecord.index_manifest_id == index_manifest_id)
-            .order_by(dist_expr.asc(), ChunkRecord.id.asc())
-            .limit(limit)
         )
+        stmt = _apply_document_metadata_filter(stmt, metadata_filter)
+        stmt = stmt.order_by(dist_expr.asc(), ChunkRecord.id.asc()).limit(limit)
         rows = self._session.execute(stmt).all()
         return [(r[0], r[1], float(r[2])) for r in rows]

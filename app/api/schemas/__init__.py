@@ -29,6 +29,7 @@ from app.api.schemas.index import (
 )
 from app.api.schemas.ingest import IngestRequest, IngestResponse
 from app.api.schemas.retrieve import (
+    MetadataFilterParams,
     RetrievalParams,
     RetrievedChunkResponse,
     RetrieveRequest,
@@ -57,6 +58,7 @@ __all__ = [
     "IndexResponse",
     "IngestRequest",
     "IngestResponse",
+    "MetadataFilterParams",
     "RetrievedChunkResponse",
     "RetrieveRequest",
     "RetrieveResponse",

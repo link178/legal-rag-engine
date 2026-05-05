@@ -1,779 +1,531 @@
-# Fase 9 — API pipeline completion: chunk + index endpoints para legal-rag-engine
+Prompt — Phase 14: Metadata-aware Retrieval Filters
+# PROMPT — Phase 14: Metadata-aware Retrieval Filters
 
-Actúa como senior backend engineer especializado en FastAPI, RAG systems, contratos Pydantic, pipelines documentales reproducibles y APIs thin-wrapper sobre motores existentes.
+Actúa como senior Python/RAG retrieval engineer trabajando en el repo `legal-rag-engine`.
 
-Estamos trabajando en el repo `legal-rag-engine`.
+## Contexto
 
-## Contexto del proyecto
+Estamos construyendo `legal-rag-engine`, un motor RAG público, open-source, local-first y orientado a portfolio técnico.
 
-`legal-rag-engine` es un motor RAG público, open-source, local-first, engine-first y orientado a portfolio técnico.
+El proyecto ya tiene:
 
-El objetivo NO es construir todavía:
+- Ingestion `.txt`, `.md`, `.html`, `.htm`, `.pdf`.
+- HTML/PDF loaders.
+- Legal corpus adapter.
+- Extra metadata injection during ingestion.
+- Corpus import tracking via `corpus_run_id`.
+- PostgreSQL + pgvector.
+- Chunking `fixed_size` / `structure_aware`.
+- Indexing manifests.
+- Dense retrieval.
+- Sparse retrieval.
+- Hybrid retrieval with RRF.
+- Retrieval evaluation.
+- Grounded answer generation with mock provider.
+- Citation verification.
+- E2E answer evaluation.
+- FastAPI API v1.
+- Streamlit API demo.
 
-- SaaS;
-- plataforma AI Act/compliance end-to-end;
-- dashboard enterprise;
-- sistema multi-tenant;
-- auth/SSO;
-- billing;
-- workers async complejos;
-- background jobs;
-- producto comercial.
-
-El objetivo es exponer de forma limpia el pipeline RAG ya construido, manteniendo la API como capa fina sobre el engine.
-
-La API no debe duplicar lógica de ingestion, chunking, indexing, retrieval ni generation.
-
----
-
-# Estado actual
-
-El pipeline interno ya soporta:
+Phase 13 added legal corpus metadata such as:
 
 ```text
-documents
-→ ingest
-→ normalize
-→ persist Document
-→ chunk
-→ persist Chunk
-→ index dense/sparse
-→ manifests
-→ pgvector chunk_embeddings
-→ sparse rows
-→ retrieve dense/sparse/hybrid
-→ RRF
-→ retrieval evaluation
-→ context building
-→ grounded prompt
-→ mock generation
-→ citation extraction
-→ citation verification
-→ GroundedAnswer
+corpus_adapter
+corpus_name
+corpus_relative_path
+jurisdiction
+source_family
+legal_document_type
+language
+version
+effective_date
+canonical_id
 
-Fases cerradas:
+Current QA:
 
-Fase 1: bootstrap FastAPI, config, logging, healthcheck, tooling.
-Fase 2A: dominio + persistencia base con SQLAlchemy/Alembic.
-Fase 2B: ingestión .txt / .md, normalización, checksums, CLI.
-Fase 3: chunking fixed_size y structure_aware.
-Fase 4A: indexing foundations, deterministic hash embeddings, sparse tokenizer, manifests.
-Fase 4B: embeddings persistidos en chunk_embeddings con pgvector, provider local opcional sentence-transformers.
-Fase 5: retrieval dense/sparse/hybrid + RRF.
-Fase 5.5: retrieval evaluation baseline con golden questions, Hit@k y MRR.
-Fase 6: grounded generation con context builder, grounded prompt y mock provider.
-Fase 7: citation verification mecánica.
-Fase 8: API v1 mínima.
+pytest -q: 357 passed, 11 skipped
+ruff check app tests: clean
+mypy app: clean
+Objective
 
-Fase 8 añadió API HTTP para:
+Implement metadata-aware retrieval filters across retrieval, API, CLI, evaluation, and demo surfaces where appropriate.
 
-GET  /health
-GET  /
-POST /v1/ingest
-GET  /v1/documents
-GET  /v1/documents/{document_id}
+The goal is to allow retrieval to constrain candidate chunks/documents using document metadata before or during ranking.
+
+Example use cases:
+
+Only retrieve from jurisdiction = eu.
+Only retrieve from jurisdiction = es.
+Only retrieve from corpus_name = legalize_sample.
+Only retrieve from legal_document_type = regulation.
+Only retrieve from language = en.
+
+This phase must remain local-first and deterministic.
+
+Non-goals
+
+Do NOT implement:
+
+real LLM provider
+semantic metadata inference
+legal reasoning
+AI Act classification
+compliance dashboard
+multi-tenant filtering
+authorization/RLS
+complex query DSL
+Elasticsearch/OpenSearch
+metadata faceting UI beyond simple filters
+ranking learning
+reranking
+new vector backend
+Design principles
+Keep filters simple and explicit.
+Reuse existing metadata stored on documents.metadata_json.
+Do not duplicate metadata into chunks unless already present or clearly needed.
+Preserve existing retrieval behavior when no filters are provided.
+Dense, sparse, and hybrid retrieval should all support filters consistently.
+Evaluation should be able to run with filters.
+API contracts should remain backward-compatible.
+CLI should remain backward-compatible.
+Streamlit can expose a minimal optional filter panel.
+Tests must not require Postgres except existing opt-in integration tests.
+Filter model
+
+Add a retrieval filter model.
+
+Suggested location:
+
+app/retrieval/models.py
+
+Suggested shape:
+
+@dataclass(frozen=True)
+class RetrievalMetadataFilter:
+    corpus_name: str | None = None
+    corpus_adapter: str | None = None
+    source_family: str | None = None
+    jurisdiction: str | None = None
+    legal_document_type: str | None = None
+    language: str | None = None
+    canonical_id: str | None = None
+
+If the project uses Pydantic models for API and dataclasses for domain, keep that split.
+
+Add the filter to:
+
+RetrievalConfig
+
+or equivalent.
+
+Suggested field:
+
+metadata_filter: RetrievalMetadataFilter | None = None
+
+No filter means current behavior.
+
+Matching semantics
+
+Implement exact-match semantics only.
+
+For each non-null filter field:
+
+documents.metadata_json[field] == value
+
+All fields are ANDed.
+
+Example:
+
+{
+  "jurisdiction": "eu",
+  "legal_document_type": "regulation"
+}
+
+means:
+
+jurisdiction = eu AND legal_document_type = regulation
+
+Do not implement OR, contains, regex, ranges, or nested operators in this phase.
+
+Storage/query layer
+
+Update dense and sparse retrieval queries so they can restrict by document metadata.
+
+Current likely path:
+
+chunk_embeddings
+→ chunks
+→ documents
+→ documents.metadata_json
+
+The implementation should filter through the document associated with each chunk.
+
+Postgres JSONB examples:
+
+documents.metadata_json ->> 'jurisdiction' = 'eu'
+
+or SQLAlchemy equivalent.
+
+Important:
+
+Do not load all chunks into Python just to filter if avoidable.
+Apply filters in SQL where practical.
+Keep deterministic behavior.
+Avoid breaking deterministic_hash tests.
+Dense retrieval
+
+Update dense retriever so filtered dense search only ranks embeddings whose chunks belong to documents matching metadata filters.
+
+Expected behavior:
+
+no filter: unchanged
+filter matches documents: returns only matching chunks
+filter matches nothing: returns empty result set
+unsupported mode/filter combo: should not happen
+Sparse retrieval
+
+Update sparse retriever so sparse scoring only considers chunks whose documents match metadata filters.
+
+Expected behavior:
+
+no filter: unchanged
+filter matches documents: returns only matching chunks
+filter matches nothing: returns empty result set
+Hybrid retrieval
+
+Hybrid retrieval should pass the same metadata filter into both dense and sparse retrievers before RRF fusion.
+
+Expected behavior:
+
+dense and sparse candidate sets are both constrained.
+RRF fuses only filtered candidates.
+retrieval_sources remain correct.
+no filter: unchanged.
+API
+
+Extend request schemas for:
+
 POST /v1/retrieve
 POST /v1/answer
 
-QA actual reportado:
+Add optional object:
 
-python -m pytest -q → 249 passed, 8 skipped
-python -m ruff check app tests → clean
-python -m mypy app → clean
-Problema que resuelve esta fase
+{
+  "metadata_filter": {
+    "corpus_name": "legalize_sample",
+    "jurisdiction": "eu",
+    "legal_document_type": "regulation",
+    "language": "en"
+  }
+}
 
-Ahora la API permite ingestar, recuperar y responder, pero todavía no permite ejecutar por HTTP los pasos intermedios:
+All fields optional.
 
-chunking
-indexing
-manifest inspection
+Backward compatibility:
 
-Por tanto, para operar el pipeline completo todavía hace falta CLI entre /v1/ingest y /v1/retrieve.
+Existing requests without metadata_filter must continue to work.
 
-Esta fase completa el pipeline HTTP mínimo:
+Validate fields as simple optional strings.
 
-POST /v1/ingest
-→ POST /v1/chunk
-→ POST /v1/index
-→ GET  /v1/index-manifests
-→ POST /v1/retrieve
-→ POST /v1/answer
-Objetivo de esta fase
+Do not require filters.
 
-Implementar endpoints API v1 para:
+Do not add new endpoint yet.
 
-POST /v1/chunk
-POST /v1/index
-GET  /v1/index-manifests
-GET  /v1/index-manifests/{manifest_id}
+CLI
 
-Opcional si es trivial y encaja con repositorios existentes:
+Extend retrieval CLI and generation CLI with optional flags.
 
-GET /v1/documents/{document_id}/chunks
+Suggested flags:
 
-La API debe seguir siendo una capa fina sobre runners/repositorios existentes.
+--filter-corpus-name legalize_sample
+--filter-corpus-adapter legalize
+--filter-source-family legalize
+--filter-jurisdiction eu
+--filter-legal-document-type regulation
+--filter-language en
+--filter-canonical-id demo-ai-act-fragment
 
-No crear endpoints async, jobs, workers ni colas.
+Apply same pattern to:
 
-No implementar upload multipart.
+app.retrieval.cli
+app.generation.cli
+app.evaluation.cli answer/retrieval if feasible
 
-No implementar LLM real.
+If adding all flags to evaluation is too large, add at least to retrieval and generation CLI, and document evaluation as a follow-up. Prefer adding to evaluation too if it is clean.
 
-No implementar Streamlit.
+Evaluation
 
-Scope
+Extend retrieval evaluation golden questions to optionally include metadata filters.
 
-Actualizar o crear bajo app/api/:
+Suggested JSONL field:
 
-app/api/schemas.py
-app/api/mappers.py
-app/api/errors.py
-app/api/routes/
-   ├─ chunk.py
-   ├─ index.py
-   └─ documents.py      # solo si se añade /documents/{id}/chunks
+{
+  "id": "eu_regulation_filtered",
+  "query": "What does the demo AI Act fragment describe?",
+  "expected_terms": ["AI Act", "synthetic"],
+  "recommended_mode": "sparse_only",
+  "metadata_filter": {
+    "corpus_name": "legalize_sample",
+    "jurisdiction": "eu",
+    "legal_document_type": "regulation"
+  }
+}
 
-Actualizar:
+Extend answer evaluation golden questions similarly if clean.
 
-app/main.py
+Important:
 
-Actualizar repositorios solo si hace falta algún método pequeño y bien testeado:
+Existing golden datasets must still work.
+Existing evaluation commands must still work.
+Filtered eval tests should use sample legal corpus if possible.
+Unit tests should use fake retrievers/answerers where possible.
+Streamlit demo
 
-app/storage/postgres/repositories.py
+Add a minimal optional filter expander in the Retrieval and Answer tabs.
 
-Actualizar tests:
+Suggested UI:
 
-tests/unit/api/
-├─ test_api_schemas.py
-├─ test_api_routes_chunk.py
-├─ test_api_routes_index.py
-└─ test_api_routes_documents.py
+Metadata filters optional
+- corpus_name
+- jurisdiction
+- legal_document_type
+- language
+- canonical_id
 
-Opcional integration test:
+Do not overbuild.
 
-tests/integration/test_api_pipeline_persist.py
+Do not add faceted search.
 
-Debe estar gated por:
+Do not add dynamic metadata discovery unless trivial.
 
-LEGAL_RAG_RUN_INTEGRATION_DB=1
+The demo should send metadata_filter only when at least one field is filled.
 
-Actualizar docs:
+Documentation
 
-docs/implementation/api-notes.md
-docs/implementation/implementation-manual.md
-docs/README.md
+Update:
+
+docs/implementation/retrieval-notes.md
+docs/implementation/generation-notes.md
+docs/implementation/evaluation-notes.md
+docs/implementation/demo-notes.md
 README.md
 
-No añadir migraciones salvo necesidad real. Esta fase debería usar tablas existentes.
+Add a concise section:
 
-Requisitos funcionales
-1. Endpoint POST /v1/chunk
+## Metadata-aware retrieval filters
 
-Crear router:
+Explain:
 
-app/api/routes/chunk.py
+supported fields
+exact-match semantics
+AND semantics
+API examples
+CLI examples
+limitations
 
-Endpoint:
-
-POST /v1/chunk
-
-Debe envolver el runner/servicio existente de chunking.
-
-Request
-
-Añadir en app/api/schemas.py:
-
-ChunkRequest
-
-Campos recomendados:
-
-document_id: UUID
-strategy: Literal["fixed_size", "structure_aware"] = "fixed_size"
-chunk_size: int | None = None
-chunk_overlap: int | None = None
-persist: bool = True
-force: bool = False
-
-Ajusta nombres/campos a la configuración real del chunking actual.
-
-Validaciones:
-
-document_id obligatorio
-strategy válida
-chunk_size > 0 si se proporciona
-chunk_overlap >= 0 si se proporciona
-chunk_overlap < chunk_size si ambos existen
-persist debe ser true si el runner API necesita persistencia para pasos posteriores
-
-Si el sistema actual tiene defaults propios para chunking, no duplicar defaults de forma inconsistente.
-
-Response
-
-Añadir:
-
-ChunkResponse
-ChunkItemResponse
-
-Campos recomendados:
-
-document_id: UUID
-processing_run_id: UUID | None
-strategy: str
-config_hash: str | None
-created: bool | None
-skipped: bool | None
-chunks_count: int
-chunks: list[ChunkItemResponse]
-metadata: dict[str, Any]
-
-ChunkItemResponse:
-
-chunk_id: UUID
-document_id: UUID
-chunk_index: int
-text: str
-checksum: str | None
-metadata: dict[str, Any]
-
-Si devolver todos los chunks puede ser excesivo, añade:
-
-include_chunks: bool = True
-
-o limita respuesta a summary + primeros N. Para esta fase, con corpus pequeño, puede devolverlos, pero mantén diseño razonable.
-
-Comportamiento
-Busca el documento por document_id.
-Si no existe, devolver 404.
-Ejecuta chunking con estrategia/config.
-Persiste por defecto.
-Respeta idempotencia existente:
-si ya existen chunks para misma estrategia/config, devolver skipped/summary si el runner lo soporta.
-No indexar automáticamente.
-No crear lógica de chunking en el router.
-No modificar ingestion.
-
-Ejemplo request:
+Example API request:
 
 {
-  "document_id": "00000000-0000-0000-0000-000000000000",
-  "strategy": "fixed_size",
-  "chunk_size": 1000,
-  "chunk_overlap": 150,
-  "persist": true
-}
-
-Ejemplo response:
-
-{
-  "document_id": "00000000-0000-0000-0000-000000000000",
-  "processing_run_id": "11111111-1111-1111-1111-111111111111",
-  "strategy": "fixed_size",
-  "config_hash": "abc123",
-  "created": true,
-  "skipped": false,
-  "chunks_count": 3,
-  "chunks": [
-    {
-      "chunk_id": "22222222-2222-2222-2222-222222222222",
-      "document_id": "00000000-0000-0000-0000-000000000000",
-      "chunk_index": 0,
-      "text": "...",
-      "checksum": "...",
-      "metadata": {}
-    }
-  ],
-  "metadata": {}
-}
-2. Optional GET /v1/documents/{document_id}/chunks
-
-Añadir solo si es trivial con repositorios existentes.
-
-Endpoint:
-
-GET /v1/documents/{document_id}/chunks
-
-Query params:
-
-strategy=fixed_size optional
-limit=100 optional
-
-Response:
-
-DocumentChunksResponse
-
-Campos:
-
-document_id: UUID
-count: int
-chunks: list[ChunkItemResponse]
-
-Validaciones:
-
-limit entre 1 y 500
-document no existe → 404
-
-Si añadirlo implica demasiado cambio de repositorio, omitirlo y documentar que queda pendiente.
-
-3. Endpoint POST /v1/index
-
-Crear router:
-
-app/api/routes/index.py
-
-Endpoint:
-
-POST /v1/index
-
-Debe envolver el runner existente de indexing.
-
-Request
-
-Añadir:
-
-IndexRequest
-
-Campos recomendados:
-
-chunking_strategy: str = "fixed_size"
-include_dense: bool = True
-include_sparse: bool = True
-embedding_provider: str = "deterministic_hash"
-embedding_model: str | None = None
-embedding_dimensions: int = 16
-force_reindex: bool = False
-
-Si el código actual usa nombres distintos, alinear con IndexingConfig real.
-
-Validaciones:
-
-al menos uno de include_dense/include_sparse debe ser true
-embedding_dimensions > 0
-embedding_provider no vacío
-si embedding_provider == deterministic_hash, embedding_dimensions debe estar presente
-si embedding_provider == local_sentence_transformers, embedding_model debería estar presente o resolverse con default existente
-
-No instalar ni descargar sentence-transformers desde API. Si el provider local no está instalado y se solicita, devolver error controlado.
-
-Response
-
-Añadir:
-
-IndexResponse
-
-Campos recomendados:
-
-manifest_id: UUID | None
-manifest_hash: str | None
-config_hash: str | None
-chunk_set_hash: str | None
-chunking_strategy: str
-include_dense: bool
-include_sparse: bool
-embedding_provider: str
-embedding_model: str | None
-embedding_dimensions: int
-embeddings_persisted: bool
-indexed_chunks_count: int
-processing_run_id: UUID | None
-created: bool | None
-skipped: bool | None
-metadata: dict[str, Any]
-
-Ajustar al resultado real de app.indexing.runner.
-
-Comportamiento
-Ejecuta indexing sobre chunks persistidos.
-No ingesta ni chunkea automáticamente.
-Si no hay chunks para la estrategia, devolver error controlado:
-404 si se trata como recurso no encontrado.
-400 si se trata como estado inválido del pipeline.
-Respeta idempotencia existente por manifest/config.
-No crear ProcessingRun manualmente en router; usar runner existente.
-No reimplementar embedding provider factory.
-No modificar retrieval.
-
-Ejemplo request:
-
-{
+  "query": "What does the demo AI Act fragment describe?",
+  "mode": "hybrid",
   "chunking_strategy": "fixed_size",
-  "include_dense": true,
-  "include_sparse": true,
-  "embedding_provider": "deterministic_hash",
-  "embedding_dimensions": 16
+  "top_k": 5,
+  "metadata_filter": {
+    "corpus_name": "legalize_sample",
+    "jurisdiction": "eu",
+    "legal_document_type": "regulation"
+  }
 }
 
-Ejemplo response:
+Example answer request:
 
 {
-  "manifest_id": "33333333-3333-3333-3333-333333333333",
-  "manifest_hash": "abc123",
-  "config_hash": "def456",
-  "chunk_set_hash": "ghi789",
+  "question": "What does the demo AI Act fragment describe?",
+  "mode": "hybrid",
   "chunking_strategy": "fixed_size",
-  "include_dense": true,
-  "include_sparse": true,
-  "embedding_provider": "deterministic_hash",
-  "embedding_model": null,
-  "embedding_dimensions": 16,
-  "embeddings_persisted": true,
-  "indexed_chunks_count": 3,
-  "processing_run_id": "44444444-4444-4444-4444-444444444444",
-  "created": true,
-  "skipped": false,
-  "metadata": {}
+  "top_k": 5,
+  "provider": "mock",
+  "metadata_filter": {
+    "jurisdiction": "eu"
+  }
 }
-4. Endpoint GET /v1/index-manifests
+Tests
+
+Add/extend unit tests for:
+
+Filter model
+empty filter is treated as no filter
+partially filled filter works
+all supported fields serialize/convert correctly
+Dense retrieval
+
+Use existing fake/session patterns if available.
+
+Cases:
+
+no filter preserves previous behavior
+matching filter returns expected chunks
+non-matching filter returns empty results
+Sparse retrieval
+
+Cases:
+
+no filter preserves previous behavior
+matching filter returns expected chunks
+non-matching filter returns empty results
+Hybrid retrieval
+
+Cases:
+
+filter is passed to both dense and sparse retrievers
+fused results contain only matching metadata
+no filter unchanged
+API schemas
+/v1/retrieve accepts no filter
+/v1/retrieve accepts filter
+/v1/answer accepts no filter
+/v1/answer accepts filter
+invalid filter type returns validation error
+CLI
+retrieval CLI builds metadata filter from flags
+generation CLI builds metadata filter from flags
+evaluation CLI preserves legacy behavior
+filtered evaluation if implemented
+Streamlit/API client
+
+If app/ui/api_client.py has typed helpers, test that metadata_filter is sent correctly.
+
+Integration tests
+
+Optional but valuable with LEGAL_RAG_RUN_INTEGRATION_DB=1.
+
+Suggested integration smoke:
+
+Import data/sample_corpus/legalize_sample with --persist.
+Chunk fixed_size.
+Index sparse/dense.
+Retrieve query with jurisdiction=eu.
+Assert returned documents all have jurisdiction=eu.
+Retrieve with impossible filter.
+Assert no results.
+
+Only add if stable and not slow.
+
+Acceptance criteria
+
+Phase is complete if:
+
+Retrieval config supports optional metadata filters.
+Dense retrieval supports metadata filters.
+Sparse retrieval supports metadata filters.
+Hybrid retrieval supports metadata filters consistently.
+Existing retrieval behavior is unchanged when no filters are passed.
+/v1/retrieve accepts optional metadata_filter.
+/v1/answer accepts optional metadata_filter.
+Retrieval CLI supports filter flags.
+Generation CLI supports filter flags.
+Evaluation supports filters or has a documented limited follow-up if not feasible.
+Streamlit demo exposes minimal optional filters for retrieval/answer.
+Unit tests cover filter conversion/semantics.
+Unit tests cover dense/sparse/hybrid filter behavior.
+API tests cover filtered requests.
+Existing tests pass.
+Ruff is clean.
+Mypy is clean.
+Docs are updated.
+No new external service dependency.
+No complex query DSL or scope creep.
+Validation commands
+
+Run:
 
-Endpoint:
-
-GET /v1/index-manifests
-
-Debe listar manifests.
-
-Query params
-limit=50
-chunking_strategy optional
-include_sparse optional
-include_dense optional
-embedding_provider optional
-
-Mantén filtros simples. Si los repositorios actuales no soportan filtros, implementa solo limit y deja filtros para futuro.
-
-Response
-
-Añadir:
-
-IndexManifestListResponse
-IndexManifestItemResponse
-
-Campos recomendados:
-
-manifests: list[IndexManifestItemResponse]
-count: int
-
-IndexManifestItemResponse:
-
-manifest_id: UUID
-manifest_hash: str
-config_hash: str
-chunk_set_hash: str
-chunking_strategy: str
-include_dense: bool
-include_sparse: bool
-embedding_provider: str
-embedding_model: str | None
-embedding_dimensions: int
-embeddings_persisted: bool
-created_at: datetime | None
-metadata: dict[str, Any]
-
-Ajustar a columnas reales.
-
-Comportamiento
-Ordenar más recientes primero si existe created_at.
-No devolver embeddings.
-No devolver chunks salvo que ya exista relación clara y ligera.
-5. Endpoint GET /v1/index-manifests/{manifest_id}
-
-Endpoint:
-
-GET /v1/index-manifests/{manifest_id}
-
-Debe devolver detalle del manifest.
-
-Response puede reutilizar IndexManifestItemResponse, añadiendo:
-
-indexed_chunks_count: int | None
-
-Si contar chunks es trivial con repositorio existente, hacerlo. Si no, omitir o dejar null.
-
-404 si no existe.
-
-6. API mappers
-
-Actualizar app/api/mappers.py.
-
-Añadir funciones puras para convertir objetos internos a schemas:
-
-chunk_result_to_response(...)
-chunk_record_to_response(...)
-index_result_to_response(...)
-index_manifest_record_to_response(...)
-
-No montar lógica de negocio en mappers.
-
-No hacer queries DB dentro de mappers si se puede evitar. Si necesitas counts, resolver antes en router/repo.
-
-7. Error handling
-
-Actualizar app/api/errors.py.
-
-Mapear errores relevantes de chunking/indexing.
-
-Recomendado:
-
-ChunkingError                         → 400
-DocumentNotFound / missing document   → 404
-IndexingError                         → 400
-ManifestNotFoundError                 → 404
-EmbeddingDimensionMismatchError       → 400
-Unsupported/Provider import error     → 400
-ValueError controlado                 → 400
-Unexpected                            → 500
-
-Si existen clases específicas en app/chunking/errors.py o app/indexing/errors.py, mapearlas explícitamente.
-
-No exponer stack traces.
-
-8. App registration
-
-Actualizar app/main.py.
-
-Registrar routers:
-
-app.include_router(chunk.router, prefix="/v1", tags=["chunk"])
-app.include_router(index.router, prefix="/v1", tags=["index"])
-
-Mantener funcionando:
-
-GET /
-GET /health
-POST /v1/ingest
-GET /v1/documents
-GET /v1/documents/{document_id}
-POST /v1/retrieve
-POST /v1/answer
-
-No romper rutas existentes.
-
-9. Tests unitarios
-
-Todos los tests unitarios deben funcionar sin Postgres real.
-
-Usar TestClient, dependency overrides y monkeypatch.
-
-test_api_schemas.py
-
-Añadir tests para:
-
-ChunkRequest válido.
-ChunkRequest falla si overlap >= size.
-ChunkRequest falla si strategy inválida.
-IndexRequest válido.
-IndexRequest falla si include_dense=false e include_sparse=false.
-IndexRequest falla si embedding_dimensions <= 0.
-IndexManifest response serializa bien.
-test_api_routes_chunk.py
-
-Cubrir:
-
-POST /v1/chunk devuelve 200 con response shape.
-POST /v1/chunk document not found devuelve 404.
-POST /v1/chunk validation error devuelve 422 o 400 según FastAPI/schema.
-POST /v1/chunk no indexa automáticamente.
-GET /v1/documents/{document_id}/chunks si se implementa.
-
-No requerir DB: usar fake session + monkeypatch del runner/repo.
-
-test_api_routes_index.py
-
-Cubrir:
-
-POST /v1/index devuelve 200 con manifest response.
-POST /v1/index sin chunks devuelve 400/404 controlado.
-POST /v1/index provider error devuelve 400.
-GET /v1/index-manifests devuelve lista.
-GET /v1/index-manifests/{id} devuelve detalle.
-GET /v1/index-manifests/{id} no existente devuelve 404.
-
-No requerir DB.
-
-Regression tests
-
-Asegurar que siguen pasando route tests existentes:
-
-/v1/ingest
-/v1/documents
-/v1/retrieve
-/v1/answer
-/health
-/
-10. Integration test opcional
-
-Si encaja limpio, añadir:
-
-tests/integration/test_api_pipeline_persist.py
-
-Gated por:
-
-LEGAL_RAG_RUN_INTEGRATION_DB=1
-
-Flujo mínimo:
-
-POST /v1/ingest
-→ POST /v1/chunk
-→ POST /v1/index
-→ GET /v1/index-manifests
-→ POST /v1/retrieve
-→ POST /v1/answer
-
-Assertions:
-
-ingest devuelve document_id
-chunk devuelve chunks_count >= 1
-index devuelve manifest_id o manifest_hash
-retrieve devuelve JSON shape válido
-answer devuelve citation_verification
-
-No exigir calidad semántica con deterministic embeddings.
-
-No depender de orden frágil salvo que esté garantizado.
-
-11. Documentación
-
-Actualizar:
-
-docs/implementation/api-notes.md
-
-Añadir sección:
-
-## Pipeline endpoints
-
-Explicar que el flujo HTTP mínimo ahora es:
-
-/v1/ingest
-→ /v1/chunk
-→ /v1/index
-→ /v1/retrieve
-→ /v1/answer
-
-Añadir ejemplos curl.
-
-POST /v1/chunk
-curl -X POST http://localhost:8000/v1/chunk \
-  -H "Content-Type: application/json" \
-  -d '{
-    "document_id":"<document_id>",
-    "strategy":"fixed_size",
-    "chunk_size":1000,
-    "chunk_overlap":150,
-    "persist":true
-  }'
-POST /v1/index
-curl -X POST http://localhost:8000/v1/index \
-  -H "Content-Type: application/json" \
-  -d '{
-    "chunking_strategy":"fixed_size",
-    "include_dense":true,
-    "include_sparse":true,
-    "embedding_provider":"deterministic_hash",
-    "embedding_dimensions":16
-  }'
-GET /v1/index-manifests
-curl http://localhost:8000/v1/index-manifests
-GET /v1/index-manifests/{manifest_id}
-curl http://localhost:8000/v1/index-manifests/<manifest_id>
-
-Actualizar también:
-
-README.md
-docs/README.md
-docs/implementation/implementation-manual.md
-
-Dejar explícito:
-
-No upload multipart yet.
-No async jobs yet.
-No auth/multi-tenant.
-No LLM real.
-No /v1/ask.
-Constraints importantes
-
-No hacer:
-
-No implementar /v1/ask.
-No implementar upload multipart.
-No implementar URL ingestion.
-No implementar background jobs.
-No implementar async workers.
-No implementar Streamlit.
-No implementar OpenAI.
-No implementar Anthropic.
-No implementar Ollama.
-No añadir API keys.
-No llamar LLM externo.
-No añadir Qdrant.
-No añadir Redis.
-No añadir auth.
-No añadir users.
-No añadir billing.
-No añadir multi-tenant.
-No persistir generation runs.
-No crear ProcessingRun manualmente en routers.
-No duplicar lógica de engine dentro de routers.
-No añadir migrations salvo necesidad real.
-No romper CLIs existentes.
-No romper endpoints de Fase 8.
-
-Mantener:
-
-API como thin wrapper.
-local-first.
-zero-cost baseline.
-deterministic behavior.
-Pydantic v2.
-tests unitarios sin DB.
-integration tests opt-in.
-typing fuerte.
-ruff clean.
-mypy clean.
-docs claras.
-separación de capas.
-Criterios de aceptación
-
-La fase se considera completa si:
-
-GET /health sigue funcionando.
-GET / sigue funcionando.
-Endpoints de Fase 8 siguen funcionando.
-Existe POST /v1/chunk.
-Existe POST /v1/index.
-Existe GET /v1/index-manifests.
-Existe GET /v1/index-manifests/{manifest_id}.
-Opcionalmente existe GET /v1/documents/{document_id}/chunks.
-/v1/chunk envuelve el runner/servicio de chunking existente.
-/v1/index envuelve el runner de indexing existente.
-/v1/index-manifests no devuelve embeddings.
-No se crea lógica de chunking/indexing dentro de routers.
-No se crean ProcessingRuns manualmente en routers.
-No se implementa /v1/ask.
-No se implementan jobs/colas.
-No se añaden dependencias cloud.
-No se llama LLM externo.
-Schemas Pydantic validan inputs.
-Errores comunes se traducen a JSON controlado.
-Tests unitarios cubren schemas y rutas nuevas.
-Tests unitarios no requieren Postgres.
-Integration test, si existe, está gated.
-Documentación API actualizada.
-README actualizado.
-CLIs existentes siguen funcionando.
-python -m pytest -q pasa.
-python -m ruff check app tests pasa.
-python -m mypy app pasa.
-Resultado esperado al terminar
-
-Devuelve un resumen con:
-
-archivos creados;
-archivos modificados;
-endpoints añadidos;
-tests añadidos/modificados;
-comandos curl para probar el pipeline HTTP completo;
-limitaciones conocidas;
-output de:
 python -m pytest -q
 python -m ruff check app tests
 python -m mypy app
 
-No hagas cambios fuera de scope.
+Manual smoke, after importing legal sample and indexing:
+
+python -m app.retrieval.cli "What does the demo AI Act fragment describe?" \
+  --mode hybrid \
+  --chunking-strategy fixed_size \
+  --top-k 5 \
+  --filter-corpus-name legalize_sample \
+  --filter-jurisdiction eu \
+  --filter-legal-document-type regulation \
+  --json
+
+Generation smoke:
+
+python -m app.generation.cli "What does the demo AI Act fragment describe?" \
+  --mode hybrid \
+  --chunking-strategy fixed_size \
+  --top-k 5 \
+  --provider mock \
+  --filter-jurisdiction eu \
+  --json
+
+API smoke:
+
+$retrieveResponse = Invoke-RestMethod `
+  -Method Post `
+  -Uri "http://localhost:8000/v1/retrieve" `
+  -ContentType "application/json" `
+  -Body '{
+    "query": "What does the demo AI Act fragment describe?",
+    "mode": "hybrid",
+    "chunking_strategy": "fixed_size",
+    "top_k": 5,
+    "metadata_filter": {
+      "corpus_name": "legalize_sample",
+      "jurisdiction": "eu",
+      "legal_document_type": "regulation"
+    }
+  }'
+
+$retrieveResponse | ConvertTo-Json -Depth 20
+Final report expected from the agent
+
+At the end, report:
+
+Files created.
+Files modified.
+Filter model added.
+API changes.
+CLI changes.
+Evaluation/demo changes.
+Test coverage added.
+Manual smoke commands.
+pytest result.
+ruff result.
+mypy result.
+Limitations.
+Recommended next phase.
+
+Implement this phase incrementally and conservatively.
+
+
+---
+
+## Design decision to keep explicit
+
+Use **exact-match JSONB filters** only.
+
+Do not implement this yet:
+
+```text
+jurisdiction IN [...]
+date ranges
+effective_date <= X
+language fallback
+metadata boosting
+query DSL
+facets
+hybrid filtering + boosting
+
+Those can come later.
+
+For now, the clean contract is:
+
+metadata_filter fields are ANDed exact matches over document metadata.
+
+That is enough to make the engine meaningfully better without destabilizing it.

@@ -1,4 +1,4 @@
-"""Built-in generation providers."""
+"""Generation providers (protocol + mock baseline)."""
 
 from __future__ import annotations
 

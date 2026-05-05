@@ -1,0 +1,27 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  lint-typecheck-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install package and dev/demo extras
+        run: pip install -e ".[dev,demo]"
+
+      - name: Ruff
+        run: python -m ruff check app tests
+
+      - name: Mypy
+        run: python -m mypy app
+
+      - name: Pytest (unit/smoke only)
+        run: python -m pytest -q -m "not integration"

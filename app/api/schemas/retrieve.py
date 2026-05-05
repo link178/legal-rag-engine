@@ -5,9 +5,42 @@ from __future__ import annotations
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 _PREVIEW_LEN = 240
+
+
+class MetadataFilterParams(BaseModel):
+    """Optional exact-match filters on ``documents.metadata_json`` (Phase 14)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    corpus_name: str | None = None
+    corpus_adapter: str | None = None
+    source_family: str | None = None
+    jurisdiction: str | None = None
+    legal_document_type: str | None = None
+    language: str | None = None
+    canonical_id: str | None = None
+
+    @model_validator(mode="after")
+    def _strip_optional_strings(self) -> MetadataFilterParams:
+        updates: dict[str, str | None] = {}
+        for name in (
+            "corpus_name",
+            "corpus_adapter",
+            "source_family",
+            "jurisdiction",
+            "legal_document_type",
+            "language",
+            "canonical_id",
+        ):
+            v = getattr(self, name)
+            if v is None:
+                continue
+            s = str(v).strip()
+            updates[name] = s if s else None
+        return self.model_copy(update=updates)
 
 
 class RetrievalParams(BaseModel):
@@ -22,6 +55,7 @@ class RetrievalParams(BaseModel):
     sparse_top_k: int = Field(default=10, ge=1, le=50)
     rrf_k: int = Field(default=60, gt=0)
     index_manifest_id: UUID | None = None
+    metadata_filter: MetadataFilterParams | None = None
 
     @field_validator("chunking_strategy", mode="before")
     @classmethod

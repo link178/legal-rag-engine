@@ -8,7 +8,7 @@ from uuid import uuid4
 import pytest
 from app.retrieval.dense import DenseRetriever
 from app.retrieval.errors import EmptyQueryError
-from app.retrieval.models import RetrievalConfig
+from app.retrieval.models import RetrievalConfig, RetrievalMetadataFilter
 
 
 @pytest.fixture
@@ -43,6 +43,8 @@ def test_dense_maps_distance_to_score(manifest) -> None:
         ret = DenseRetriever(MagicMock())
         cfg = RetrievalConfig(mode="dense_only")
         out = ret.retrieve("hello", cfg, manifest)
+        inst.find_similar.assert_called_once()
+        assert inst.find_similar.call_args.kwargs.get("metadata_filter") is None
     assert len(out) == 1
     assert out[0].chunk_id == cid
     assert abs(out[0].dense_score - 1.0 / 2.0) < 1e-9
@@ -61,3 +63,13 @@ def test_dense_returns_empty_when_no_rows(manifest) -> None:
         ret = DenseRetriever(MagicMock())
         out = ret.retrieve("q", RetrievalConfig(), manifest)
     assert out == []
+
+
+def test_dense_passes_metadata_filter(manifest) -> None:
+    mf = RetrievalMetadataFilter(jurisdiction="eu")
+    with patch("app.retrieval.dense.ChunkEmbeddingRepository") as MockEmb:
+        MockEmb.return_value.find_similar.return_value = []
+        ret = DenseRetriever(MagicMock())
+        ret.retrieve("q", RetrievalConfig(metadata_filter=mf), manifest)
+    kw = MockEmb.return_value.find_similar.call_args.kwargs
+    assert kw["metadata_filter"] is mf

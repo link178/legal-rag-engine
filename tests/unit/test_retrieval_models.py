@@ -2,10 +2,16 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from uuid import uuid4
 
 import pytest
-from app.retrieval.models import RetrievalConfig, RetrievalResultSet, RetrievedChunk
+from app.retrieval.models import (
+    RetrievalConfig,
+    RetrievalMetadataFilter,
+    RetrievalResultSet,
+    RetrievedChunk,
+)
 
 
 def test_retrieval_config_defaults() -> None:
@@ -58,4 +64,13 @@ def test_retrieved_chunk_and_result_set() -> None:
         manifest_hash="x" * 64,
     )
     assert rs.results[0].chunk_id == cid
+
+
+def test_retrieval_config_metadata_filter_roundtrip() -> None:
+    mf = RetrievalMetadataFilter(jurisdiction="eu")
+    c = RetrievalConfig(metadata_filter=mf, mode="sparse_only")
+    assert c.metadata_filter is mf
+    c2 = replace(c, top_k=3)
+    assert c2.metadata_filter is mf
+    assert c2.top_k == 3
 

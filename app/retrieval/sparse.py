@@ -1,4 +1,9 @@
-"""Sparse / lexical retrieval from persisted ``index_manifest_chunks.sparse_terms_json``."""
+"""Sparse / lexical retrieval from persisted ``index_manifest_chunks.sparse_terms_json``.
+
+When ``RetrievalConfig.metadata_filter`` is set, only chunks whose documents match
+the filter participate in BM25-lite scoring; ``N`` and document frequencies are
+computed over that filtered subset (IDF is consistent within the subspace).
+"""
 
 from __future__ import annotations
 
@@ -59,7 +64,9 @@ class SparseRetriever:
         if not query_tokens:
             return []
 
-        rows = self._manifest_repo.list_sparse_chunk_rows(mid)
+        rows = self._manifest_repo.list_sparse_chunk_rows(
+            mid, metadata_filter=config.metadata_filter
+        )
         if not rows:
             return []
 

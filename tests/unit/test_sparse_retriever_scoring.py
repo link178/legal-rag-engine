@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
 import pytest
-from app.retrieval.models import RetrievalConfig
+from app.retrieval.models import RetrievalConfig, RetrievalMetadataFilter
 from app.retrieval.sparse import SparseRetriever
 
 
@@ -44,6 +44,9 @@ def test_overlap_positive_score(manifest) -> None:
         ret = SparseRetriever(MagicMock())
         cfg = RetrievalConfig(mode="sparse_only", sparse_top_k=10)
         out = ret.retrieve("cat", cfg, manifest)
+        inst = MockRepo.return_value
+        inst.list_sparse_chunk_rows.assert_called_once()
+        assert inst.list_sparse_chunk_rows.call_args.kwargs.get("metadata_filter") is None
     assert len(out) >= 1
     assert out[0].sparse_score is not None
     assert out[0].sparse_score > 0
@@ -87,3 +90,16 @@ def test_sparse_top_k(manifest) -> None:
         q = " ".join(f"t{i}" for i in range(5))
         out = ret.retrieve(q, RetrievalConfig(sparse_top_k=2), manifest)
     assert len(out) == 2
+
+
+def test_sparse_passes_metadata_filter(manifest) -> None:
+    rows = [_row("c0", {"t0": 1})]
+    mf = RetrievalMetadataFilter(jurisdiction="es")
+    with patch("app.retrieval.sparse.IndexManifestRepository") as MockRepo:
+        MockRepo.return_value.list_sparse_chunk_rows.return_value = rows
+        ret = SparseRetriever(MagicMock())
+        ret.retrieve("t0", RetrievalConfig(metadata_filter=mf), manifest)
+    kw = MockRepo.return_value.list_sparse_chunk_rows.call_args
+    assert kw[0][0] == manifest.id
+    assert kw.kwargs.get("metadata_filter") is mf
+

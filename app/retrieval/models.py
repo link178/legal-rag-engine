@@ -13,6 +13,47 @@ def _empty_metadata() -> dict[str, Any]:
     return {}
 
 
+_RETRIEVAL_METADATA_FILTER_ATTR_JSON: tuple[tuple[str, str], ...] = (
+    ("corpus_name", "corpus_name"),
+    ("corpus_adapter", "corpus_adapter"),
+    ("source_family", "source_family"),
+    ("jurisdiction", "jurisdiction"),
+    ("legal_document_type", "legal_document_type"),
+    ("language", "language"),
+    ("canonical_id", "canonical_id"),
+)
+
+
+@dataclass(frozen=True, kw_only=True, slots=True)
+class RetrievalMetadataFilter:
+    """Exact-match AND filters on ``documents.metadata_json`` (Phase 14)."""
+
+    corpus_name: str | None = None
+    corpus_adapter: str | None = None
+    source_family: str | None = None
+    jurisdiction: str | None = None
+    legal_document_type: str | None = None
+    language: str | None = None
+    canonical_id: str | None = None
+
+    def is_empty(self) -> bool:
+        """True when no non-empty string constraint is set."""
+        for attr, _ in _RETRIEVAL_METADATA_FILTER_ATTR_JSON:
+            v = getattr(self, attr)
+            if isinstance(v, str) and v.strip():
+                return False
+        return True
+
+    def as_dict(self) -> dict[str, str]:
+        """Non-empty string filters only (JSONB field name -> value)."""
+        out: dict[str, str] = {}
+        for attr, json_key in _RETRIEVAL_METADATA_FILTER_ATTR_JSON:
+            v = getattr(self, attr)
+            if isinstance(v, str) and v.strip():
+                out[json_key] = v.strip()
+        return out
+
+
 @dataclass(frozen=True, kw_only=True, slots=True)
 class RetrievalConfig:
     """Parameters for one retrieval request."""
@@ -27,6 +68,7 @@ class RetrievalConfig:
     embedding_model: str | None = None
     embedding_dimensions: int | None = None
     chunking_strategy: str | None = None
+    metadata_filter: RetrievalMetadataFilter | None = None
 
     def __post_init__(self) -> None:
         if self.mode not in SUPPORTED_RETRIEVAL_MODES:
