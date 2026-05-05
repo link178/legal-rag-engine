@@ -7,7 +7,7 @@ from uuid import uuid4
 
 import pytest
 from app.retrieval.errors import EmptyQueryError, RetrieverNotConfiguredError
-from app.retrieval.models import RetrievalConfig, RetrievedChunk
+from app.retrieval.models import RetrievalConfig, RetrievalMetadataFilter, RetrievedChunk
 from app.retrieval.orchestrator import RetrievalOrchestrator
 
 
@@ -122,3 +122,14 @@ def test_hybrid_rejects_manifest_without_sparse(manifest) -> None:
 
     with pytest.raises(ManifestNotFoundError, match="sparse"):
         orch.retrieve("hello", RetrievalConfig(mode="hybrid"), manifest)
+
+
+def test_metadata_filter_echoed_in_result_metadata(manifest) -> None:
+    mf = RetrievalMetadataFilter(jurisdiction="eu")
+    cfg = RetrievalConfig(mode="dense_only", metadata_filter=mf, top_k=3)
+    d = MagicMock()
+    d.retrieve.return_value = [_one_hit("d")]
+    orch = RetrievalOrchestrator(d, MagicMock())
+    res = orch.retrieve("hello", cfg, manifest)
+    assert res.metadata.get("metadata_filter") == {"jurisdiction": "eu"}
+

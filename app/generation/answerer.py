@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from sqlalchemy.orm import Session
 
 from app.generation.citations import verify_citations
@@ -77,7 +79,7 @@ class GroundedAnswerer:
         n_retrieved = len(retrieval.results)
         mf = self._manifest
         mf_id = str(mf.id) if mf.id else None
-        base_meta = {
+        base_meta: dict[str, Any] = {
             "generation_provider": self._provider.name,
             "retrieval_mode": retrieval.mode,
             "index_manifest_id": mf_id,
@@ -90,6 +92,9 @@ class GroundedAnswerer:
             "prompt_chars": 0,
             "answer_chars": 0,
         }
+        cfg_mf = self._config.metadata_filter
+        if cfg_mf is not None and not cfg_mf.is_empty():
+            base_meta["metadata_filter"] = dict(cfg_mf.as_dict())
 
         blocks = self._builder.build(retrieval.results)
         base_meta["total_context_blocks"] = len(blocks)

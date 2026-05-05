@@ -75,6 +75,7 @@ class DenseRetriever:
             index_manifest_id=mid,
             query_vector=qv,
             limit=config.dense_top_k,
+            metadata_filter=config.metadata_filter,
         )
         out: list[RetrievedChunk] = []
         for i, (chunk, doc, dist) in enumerate(rows, start=1):

@@ -9,7 +9,10 @@ def test_infer_source_type(tmp_path) -> None:
     assert infer_source_type(tmp_path / "a.txt") == "text"
     assert infer_source_type(tmp_path / "b.md") == "markdown"
     assert infer_source_type(tmp_path / "c.markdown") == "markdown"
-    assert infer_source_type(tmp_path / "d.pdf") == "unknown"
+    assert infer_source_type(tmp_path / "d.pdf") == "pdf"
+    assert infer_source_type(tmp_path / "e.html") == "html"
+    assert infer_source_type(tmp_path / "f.htm") == "html"
+    assert infer_source_type(tmp_path / "g.docx") == "unknown"
 
 
 def test_extract_basic_file_metadata(tmp_path) -> None:

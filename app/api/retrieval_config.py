@@ -2,9 +2,24 @@
 
 from __future__ import annotations
 
-from app.api.schemas.retrieve import RetrievalParams
+from app.api.schemas.retrieve import MetadataFilterParams, RetrievalParams
 from app.core.config import Settings
-from app.retrieval.models import RetrievalConfig
+from app.retrieval.models import RetrievalConfig, RetrievalMetadataFilter
+
+
+def _metadata_filter_from_params(m: MetadataFilterParams | None) -> RetrievalMetadataFilter | None:
+    if m is None:
+        return None
+    f = RetrievalMetadataFilter(
+        corpus_name=m.corpus_name,
+        corpus_adapter=m.corpus_adapter,
+        source_family=m.source_family,
+        jurisdiction=m.jurisdiction,
+        legal_document_type=m.legal_document_type,
+        language=m.language,
+        canonical_id=m.canonical_id,
+    )
+    return None if f.is_empty() else f
 
 
 def retrieval_config_from_params(params: RetrievalParams, settings: Settings) -> RetrievalConfig:
@@ -23,4 +38,5 @@ def retrieval_config_from_params(params: RetrievalParams, settings: Settings) ->
         embedding_model=model_norm,
         embedding_dimensions=settings.embedding_dimensions,
         chunking_strategy=params.chunking_strategy,
+        metadata_filter=_metadata_filter_from_params(params.metadata_filter),
     )

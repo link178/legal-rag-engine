@@ -152,6 +152,7 @@ class RetrievalEvaluationRunner:
             embedding_model=self._base.embedding_model,
             embedding_dimensions=self._base.embedding_dimensions,
             chunking_strategy=self._base.chunking_strategy,
+            metadata_filter=self._base.metadata_filter,
         )
         created_at = datetime.now(UTC)
         mf = self._manifest
@@ -162,6 +163,9 @@ class RetrievalEvaluationRunner:
             )
         items: list[RetrievalEvaluationItem] = []
 
+        mf_rep = None
+        if cfg.metadata_filter is not None and not cfg.metadata_filter.is_empty():
+            mf_rep = dict(cfg.metadata_filter.as_dict())
         config_report = {
             "mode": cfg.mode,
             "top_k": tk,
@@ -172,6 +176,7 @@ class RetrievalEvaluationRunner:
             "embedding_model": cfg.embedding_model,
             "embedding_dimensions": cfg.embedding_dimensions,
             "chunking_strategy": cfg.chunking_strategy,
+            "metadata_filter": mf_rep,
         }
         manifest_report = {
             "id": str(mf.id) if mf.id else None,

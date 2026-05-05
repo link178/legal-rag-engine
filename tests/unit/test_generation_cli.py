@@ -144,3 +144,30 @@ def test_cli_invalid_manifest_uuid(fake_settings) -> None:
     with patch("app.generation.cli.get_settings", return_value=fake_settings):
         rc = main(["q", "--index-manifest-id", "not-uuid", "--provider", "mock"])
     assert rc == 1
+
+
+def test_cli_metadata_filter_flags(fake_settings) -> None:
+    from app.retrieval.models import RetrievalMetadataFilter
+
+    ans = _sample_answer()
+    with patch("app.generation.cli.session_scope"):
+        with patch("app.generation.cli.GroundedAnswerer.from_session") as mf:
+            mf.return_value.answer.return_value = ans
+            with patch("app.generation.cli.get_settings", return_value=fake_settings):
+                rc = main(
+                    [
+                        "hello",
+                        "--provider",
+                        "mock",
+                        "--filter-jurisdiction",
+                        "eu",
+                        "--filter-legal-document-type",
+                        "regulation",
+                    ]
+                )
+    assert rc == 0
+    cfg = mf.call_args[0][1]
+    assert cfg.metadata_filter == RetrievalMetadataFilter(
+        jurisdiction="eu",
+        legal_document_type="regulation",
+    )

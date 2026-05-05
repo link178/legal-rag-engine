@@ -216,3 +216,67 @@ def test_retrieve_happy(
         assert "text_preview" in body["chunks"][0]
     finally:
         app.dependency_overrides.clear()
+
+
+def test_retrieve_metadata_filter_passed_and_echoed(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mf = MagicMock()
+    mf.include_sparse = True
+    monkeypatch.setattr("app.api.routes.retrieve.resolve_manifest_record", lambda *a, **k: mf)
+
+    cid, did, mid = uuid4(), uuid4(), uuid4()
+    chunk = RetrievedChunk(
+        chunk_id=cid,
+        document_id=did,
+        text="hit",
+        source_path="p.md",
+        title=None,
+        heading=None,
+        chunk_index=0,
+        chunking_strategy="fixed_size",
+        dense_score=0.5,
+        sparse_score=None,
+        rrf_score=0.02,
+        rank_position=1,
+        retrieval_sources=("dense",),
+        metadata={},
+    )
+    res = RetrievalResultSet(
+        query="qq",
+        mode="hybrid",
+        results=[chunk],
+        index_manifest_id=mid,
+        manifest_hash="a" * 64,
+        embedding_provider="deterministic_hash",
+        embedding_model=None,
+        embedding_dimensions=16,
+        metadata={"metadata_filter": {"jurisdiction": "eu"}},
+    )
+    orch = MagicMock()
+    orch.retrieve.return_value = res
+    monkeypatch.setattr("app.api.routes.retrieve.RetrievalOrchestrator", lambda _d, _s: orch)
+
+    def _fake_session():
+        yield MagicMock()
+
+    app.dependency_overrides[get_session] = _fake_session
+    try:
+        r = client.post(
+            "/v1/retrieve",
+            json={
+                "query": "qq",
+                "mode": "hybrid",
+                "top_k": 5,
+                "metadata_filter": {"jurisdiction": "eu"},
+            },
+        )
+        assert r.status_code == 200
+        body = r.json()
+        assert body["metadata"]["metadata_filter"] == {"jurisdiction": "eu"}
+        cfg = orch.retrieve.call_args[0][1]
+        assert cfg.metadata_filter is not None
+        assert cfg.metadata_filter.jurisdiction == "eu"
+    finally:
+        app.dependency_overrides.clear()
