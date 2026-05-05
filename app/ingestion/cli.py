@@ -1,4 +1,4 @@
-"""Operator CLI: ingest a single file; optional ``--persist`` to Postgres."""
+"""Operator CLI: ingest a single .txt / .md / .html / .pdf file; optional ``--persist``."""
 
 from __future__ import annotations
 
@@ -13,7 +13,9 @@ from app.ingestion.services import default_ingestion_service
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Ingest one .txt or Markdown file into Document.")
+    parser = argparse.ArgumentParser(
+        description="Ingest one .txt, Markdown, HTML, or PDF file into Document.",
+    )
     parser.add_argument("path", type=Path, help="File path to ingest")
     parser.add_argument(
         "--persist",

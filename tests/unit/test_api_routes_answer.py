@@ -234,3 +234,83 @@ def test_answer_partial_and_insufficient(
     assert r2.status_code == 200
     assert r2.json()["mode"] == "insufficient_context"
     assert r2.json()["insufficient_context"] is True
+
+
+def test_answer_metadata_filter_passed_to_config(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.retrieval.models import RetrievalMetadataFilter
+
+    cid, did = uuid4(), uuid4()
+    cite = GroundedCitation(
+        citation_id=1,
+        chunk_id=cid,
+        document_id=did,
+        source_path="p.md",
+        title=None,
+        heading=None,
+        rank=1,
+        score=0.5,
+        text_preview="pv",
+    )
+    out = GroundedAnswer(
+        question="q",
+        answer="a [1]",
+        mode="grounded",
+        citations=(cite,),
+        used_citation_ids=(1,),
+        retrieval_mode="hybrid",
+        insufficient_context=False,
+        metadata={"metadata_filter": {"jurisdiction": "eu"}},
+        citation_verification=CitationVerificationResult(
+            used_citation_ids=(1,),
+            available_citation_ids=(1,),
+            valid_citation_ids=(1,),
+            invalid_citation_ids=(),
+            unused_citation_ids=(),
+            duplicate_citation_ids=(),
+            citation_validity_rate=1.0,
+            has_citations=True,
+            has_valid_citations=True,
+            has_invalid_citations=False,
+        ),
+    )
+    captured: list = []
+
+    class _GA:
+        @classmethod
+        def from_session(cls, session, cfg, context_builder=None, provider=None):
+            captured.append(cfg)
+
+            class _I:
+                def answer(self, _q: str):
+                    return out
+
+            return _I()
+
+    monkeypatch.setattr("app.api.routes.answer.GroundedAnswerer", _GA)
+
+    class _Ctx:
+        def __enter__(self):
+            return MagicMock()
+
+        def __exit__(self, *a):
+            return None
+
+    monkeypatch.setattr(
+        "app.api.dependencies.answer.session_scope",
+        lambda database_url=None: _Ctx(),
+    )
+
+    r = client.post(
+        "/v1/answer",
+        json={
+            "question": "q",
+            "provider": "mock",
+            "metadata_filter": {"jurisdiction": "eu"},
+        },
+    )
+    assert r.status_code == 200
+    assert len(captured) == 1
+    assert captured[0].metadata_filter == RetrievalMetadataFilter(jurisdiction="eu")
+    assert r.json()["metadata"].get("metadata_filter") == {"jurisdiction": "eu"}

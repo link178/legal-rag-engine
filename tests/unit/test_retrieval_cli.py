@@ -9,7 +9,7 @@ from uuid import uuid4
 import pytest
 from app.retrieval.cli import main
 from app.retrieval.errors import ManifestNotFoundError
-from app.retrieval.models import RetrievalResultSet, RetrievedChunk
+from app.retrieval.models import RetrievalMetadataFilter, RetrievalResultSet, RetrievedChunk
 
 
 @pytest.fixture
@@ -96,3 +96,46 @@ def test_cli_manifest_not_found(fake_settings, capsys: pytest.CaptureFixture[str
     assert rc == 1
     err = capsys.readouterr().err
     assert "indexing.cli" in err
+
+
+def test_cli_metadata_filter_flags(fake_settings) -> None:
+    res = RetrievalResultSet(query="q", mode="dense_only", results=[], manifest_hash="b" * 64)
+    fake_manifest = MagicMock()
+    fake_manifest.include_sparse = False
+
+    with patch("app.retrieval.cli.session_scope"):
+        with patch("app.retrieval.cli.resolve_manifest_record", return_value=fake_manifest):
+            with patch("app.retrieval.cli.RetrievalOrchestrator") as MockOrch:
+                MockOrch.return_value.retrieve.return_value = res
+                with patch("app.retrieval.cli.get_settings", return_value=fake_settings):
+                    rc = main(
+                        [
+                            "x",
+                            "--mode",
+                            "dense_only",
+                            "--filter-jurisdiction",
+                            "eu",
+                            "--filter-legal-document-type",
+                            "regulation",
+                        ],
+                    )
+    assert rc == 0
+    cfg = MockOrch.return_value.retrieve.call_args[0][1]
+    assert cfg.metadata_filter == RetrievalMetadataFilter(
+        jurisdiction="eu",
+        legal_document_type="regulation",
+    )
+
+
+def test_cli_no_filter_flags(fake_settings) -> None:
+    res = RetrievalResultSet(query="q", mode="dense_only", results=[], manifest_hash="b" * 64)
+    fake_manifest = MagicMock()
+    fake_manifest.include_sparse = False
+    with patch("app.retrieval.cli.session_scope"):
+        with patch("app.retrieval.cli.resolve_manifest_record", return_value=fake_manifest):
+            with patch("app.retrieval.cli.RetrievalOrchestrator") as MockOrch:
+                MockOrch.return_value.retrieve.return_value = res
+                with patch("app.retrieval.cli.get_settings", return_value=fake_settings):
+                    main(["x", "--mode", "dense_only"])
+    cfg = MockOrch.return_value.retrieve.call_args[0][1]
+    assert cfg.metadata_filter is None

@@ -13,6 +13,7 @@ from app.generation.context import ContextBuilder
 from app.generation.models import CitationVerificationResult, GroundedAnswer
 from app.generation.providers.mock import MockGenerationProvider
 from app.retrieval.errors import ManifestNotFoundError, RetrievalError
+from app.retrieval.filter_cli import add_metadata_filter_flags, metadata_filter_from_args
 from app.retrieval.models import RetrievalConfig
 from app.storage.postgres.session import session_scope
 
@@ -137,6 +138,7 @@ def main(argv: list[str] | None = None) -> int:
         dest="as_json",
         help="Print GroundedAnswer as JSON",
     )
+    add_metadata_filter_flags(parser)
     args = parser.parse_args(argv)
 
     settings = get_settings()
@@ -190,6 +192,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     model_norm = (raw_model or "").strip() or None
     strat = (args.chunking_strategy or "").strip() or None
+    meta_filt = metadata_filter_from_args(args)
 
     try:
         cfg = RetrievalConfig(
@@ -203,6 +206,7 @@ def main(argv: list[str] | None = None) -> int:
             embedding_model=model_norm,
             embedding_dimensions=dims,
             chunking_strategy=strat,
+            metadata_filter=meta_filt,
         )
     except ValueError as e:
         print(f"error: {e}", file=sys.stderr)

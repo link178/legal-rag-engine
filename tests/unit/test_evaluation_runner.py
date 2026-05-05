@@ -8,7 +8,12 @@ from uuid import uuid4
 from app.evaluation.models import RetrievalGoldenQuestion
 from app.evaluation.runners.retrieval import RetrievalEvaluationRunner
 from app.retrieval.errors import EmptyQueryError
-from app.retrieval.models import RetrievalConfig, RetrievalResultSet, RetrievedChunk
+from app.retrieval.models import (
+    RetrievalConfig,
+    RetrievalMetadataFilter,
+    RetrievalResultSet,
+    RetrievedChunk,
+)
 from app.storage.postgres.models import IndexManifestRecord
 
 
@@ -127,3 +132,18 @@ def test_runner_respects_top_k_in_grading() -> None:
     summary2 = runner.run_questions((g,), top_k=2)
     assert summary2.items[0].hit is True
     assert summary2.items[0].hit_rank == 2
+
+
+def test_runner_preserves_metadata_filter_in_rebuilt_config() -> None:
+    meta_f = RetrievalMetadataFilter(jurisdiction="eu")
+    cfg = RetrievalConfig(mode="hybrid", top_k=3, metadata_filter=meta_f)
+    manifest = _manifest()
+    orch = _orch_with_hits([_one_hit()])
+    session = MagicMock()
+    runner = RetrievalEvaluationRunner(session, orch, manifest, cfg)
+    qs = (RetrievalGoldenQuestion(id="q1", question="one?", expected_terms=("foo",)),)
+    summary = runner.run_questions(qs, top_k=7)
+    assert summary.config.get("metadata_filter") == {"jurisdiction": "eu"}
+    call_cfg = orch.retrieve.call_args.args[1]
+    assert call_cfg.top_k == 7
+    assert call_cfg.metadata_filter == meta_f

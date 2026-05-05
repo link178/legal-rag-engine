@@ -16,6 +16,13 @@ from app.retrieval.sparse import SparseRetriever
 from app.storage.postgres.models import IndexManifestRecord
 
 
+def _metadata_echo(config: RetrievalConfig) -> dict[str, object]:
+    mf = config.metadata_filter
+    if mf is None or mf.is_empty():
+        return {}
+    return {"metadata_filter": dict(mf.as_dict())}
+
+
 def _finalize_branch(hits: list[RetrievedChunk], *, top_k: int) -> list[RetrievedChunk]:
     """Sort by branch score, take ``top_k``, renumber ``rank_position``; ``rrf_score`` cleared."""
     def sort_key(h: RetrievedChunk) -> tuple:
@@ -69,7 +76,7 @@ class RetrievalOrchestrator:
                 embedding_model=manifest.embedding_model,
                 embedding_dimensions=manifest.embedding_dimensions,
                 manifest_hash=mh,
-                metadata={},
+                metadata=_metadata_echo(config),
             )
 
         if config.mode == "sparse_only":
@@ -88,7 +95,7 @@ class RetrievalOrchestrator:
                 embedding_model=manifest.embedding_model,
                 embedding_dimensions=manifest.embedding_dimensions,
                 manifest_hash=mh,
-                metadata={},
+                metadata=_metadata_echo(config),
             )
 
         if config.mode == "hybrid":
@@ -119,7 +126,7 @@ class RetrievalOrchestrator:
                 embedding_model=manifest.embedding_model,
                 embedding_dimensions=manifest.embedding_dimensions,
                 manifest_hash=mh,
-                metadata={},
+                metadata=_metadata_echo(config),
             )
 
         raise ValueError(f"unsupported mode {config.mode!r}")

@@ -212,3 +212,26 @@ def test_mock_integration_path(manifest) -> None:
     assert out.mode == "grounded"
     assert out.citation_verification is not None
     assert out.citation_verification.citation_validity_rate == 1.0
+
+
+def test_metadata_filter_echoed_in_answer_metadata(manifest) -> None:
+    from app.retrieval.models import RetrievalMetadataFilter
+
+    orch = MagicMock()
+    orch.retrieve.return_value = RetrievalResultSet(
+        query="q",
+        mode="dense_only",
+        results=[_chunk("snippet")],
+    )
+    ga = GroundedAnswerer(
+        orchestrator=orch,
+        manifest=manifest,
+        config=RetrievalConfig(
+            mode="dense_only",
+            metadata_filter=RetrievalMetadataFilter(jurisdiction="eu"),
+        ),
+        context_builder=ContextBuilder(),
+        provider=MockGenerationProvider(),
+    )
+    out = ga.answer("question?")
+    assert out.metadata.get("metadata_filter") == {"jurisdiction": "eu"}

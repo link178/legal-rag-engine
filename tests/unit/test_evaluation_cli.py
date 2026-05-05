@@ -117,3 +117,21 @@ def test_cli_invalid_manifest_uuid(fake_settings) -> None:
     with patch("app.evaluation.cli.get_settings", return_value=fake_settings):
         rc = main(["g.jsonl", "--index-manifest-id", "not-a-uuid"])
     assert rc == 1
+
+
+def test_retrieval_cli_metadata_filter(fake_settings, tmp_path: Path) -> None:
+    from app.retrieval.models import RetrievalMetadataFilter
+
+    summary = _fake_summary()
+    gpath = tmp_path / "g.jsonl"
+    gpath.write_text('{"id":"x","question":"?","expected_terms":["t"]}\n', encoding="utf-8")
+    with patch("app.evaluation.cli.session_scope"):
+        with patch("app.evaluation.cli.get_settings", return_value=fake_settings):
+            with patch("app.evaluation.cli.RetrievalEvaluationRunner") as MockRunner:
+                inst = MagicMock()
+                inst.run_file.return_value = summary
+                MockRunner.from_session.return_value = inst
+                rc = main(["retrieval", str(gpath), "--filter-jurisdiction", "eu"])
+    assert rc == 0
+    cfg = MockRunner.from_session.call_args[0][1]
+    assert cfg.metadata_filter == RetrievalMetadataFilter(jurisdiction="eu")

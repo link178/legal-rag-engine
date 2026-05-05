@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
+from typing import Any
 
 from app.domain.models import Document
 from app.ingestion.checksums import compute_file_checksum, compute_text_checksum
@@ -28,7 +29,12 @@ class IngestionService:
                 e = ext.lower() if ext.startswith(".") else f".{ext.lower()}"
                 self._ext_to_loader[e] = loader
 
-    def ingest_file(self, path: Path) -> Document:
+    def ingest_file(
+        self,
+        path: Path,
+        *,
+        extra_metadata: Mapping[str, Any] | None = None,
+    ) -> Document:
         p = path.expanduser()
         if not p.exists():
             raise DocumentNotFoundError(f"Path does not exist: {path}")
@@ -52,11 +58,10 @@ class IngestionService:
         file_meta = extract_basic_file_metadata(p)
         file_checksum = compute_file_checksum(p)
 
-        metadata: dict = {
-            **file_meta,
-            **loaded.metadata,
-            "file_checksum_sha256": file_checksum,
-        }
+        metadata: dict = {**file_meta, **loaded.metadata}
+        if extra_metadata:
+            metadata.update(dict(extra_metadata))
+        metadata["file_checksum_sha256"] = file_checksum
 
         return Document(
             source_path=loaded.source_path,
@@ -70,8 +75,10 @@ class IngestionService:
 
 
 def default_ingestion_service() -> IngestionService:
-    """Service with .txt, .md, and .markdown loaders."""
+    """Service with .txt, .md, .markdown, .html, .htm, and .pdf loaders."""
+    from app.ingestion.loaders.html_loader import HtmlLoader
     from app.ingestion.loaders.markdown_loader import MarkdownLoader
+    from app.ingestion.loaders.pdf_loader import PdfLoader
     from app.ingestion.loaders.text_loader import TextLoader
 
-    return IngestionService([TextLoader(), MarkdownLoader()])
+    return IngestionService([TextLoader(), MarkdownLoader(), HtmlLoader(), PdfLoader()])

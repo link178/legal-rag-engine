@@ -10,6 +10,7 @@ from uuid import UUID
 from app.core.config import get_settings
 from app.retrieval.dense import DenseRetriever
 from app.retrieval.errors import ManifestNotFoundError, RetrievalError
+from app.retrieval.filter_cli import add_metadata_filter_flags, metadata_filter_from_args
 from app.retrieval.manifest import resolve_manifest_record
 from app.retrieval.models import RetrievalConfig
 from app.retrieval.orchestrator import RetrievalOrchestrator
@@ -69,6 +70,7 @@ def main(argv: list[str] | None = None) -> int:
         metavar="NAME",
         help="Filter auto-selected manifest by chunking_strategy",
     )
+    add_metadata_filter_flags(parser)
     parser.add_argument(
         "--json",
         action="store_true",
@@ -103,6 +105,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     model_norm = (raw_model or "").strip() or None
     strat = (args.chunking_strategy or "").strip() or None
+    meta_f = metadata_filter_from_args(args)
 
     try:
         cfg = RetrievalConfig(
@@ -116,6 +119,7 @@ def main(argv: list[str] | None = None) -> int:
             embedding_model=model_norm,
             embedding_dimensions=dims,
             chunking_strategy=strat,
+            metadata_filter=meta_f,
         )
     except ValueError as e:
         print(f"error: {e}", file=sys.stderr)
@@ -159,6 +163,9 @@ def main(argv: list[str] | None = None) -> int:
             "embedding_provider": res.embedding_provider,
             "embedding_model": res.embedding_model,
             "embedding_dimensions": res.embedding_dimensions,
+            "applied_metadata_filter": (
+                dict(cfg.metadata_filter.as_dict()) if cfg.metadata_filter else None
+            ),
             "total_results": len(res.results),
             "results": [
                 {

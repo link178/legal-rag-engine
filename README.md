@@ -1,302 +1,44 @@
-﻿# Legal RAG Engine
-
-**Legal RAG Engine** is a public, open-source, **engine-first** RAG project for building and evaluating grounded question-answering over document corpora.
-
-It is designed to demonstrate serious RAG engineering on general document collections and legal corpora such as `legalize-*`, while keeping the v1 baseline **local-first** and runnable without mandatory paid services.
-
-## What It Is
-
-A reusable RAG engine focused on:
-
-- traceable document ingestion;
-- reproducible normalization;
-- comparable chunking strategies;
-- dense retrieval;
-- sparse retrieval;
-- hybrid retrieval with RRF;
-- grounded generation with citations;
-- citation verification;
-- insufficient context fallback;
-- reproducible evaluation;
-- a FastAPI API and simple Streamlit demo.
-
-## What It Is Not
-
-This repository is not:
-
-- a SaaS product;
-- a multi-tenant platform;
-- an AI Act compliance product;
-- a commercial evidence-pack system;
-- an enterprise dashboard;
-- a billing, SSO or organization-management layer;
-- a private connector hub;
-- an advanced legal due-diligence product.
-
-The legal corpus use case is important, but the engine remains reusable for general document corpora.
-
-## Status
-
-**Phase 1 — technical bootstrap.** The repo has a runnable FastAPI app with `/health`, centralized settings, logging, and local PostgreSQL + pgvector via Docker Compose.
-
-**Phase 2A — persistence foundation.** Domain models (`Document`, `Chunk`, `ProcessingRun`), SQLAlchemy mappings, Alembic migrations for `documents`, `chunks`, and `processing_runs`, and session/repository helpers live under `app/domain/` and `app/storage/postgres/`.
-
-**Phase 2B — basic document ingestion.** `.txt` and Markdown (`.md`, `.markdown`) load into the domain `Document` via `app/ingestion/` (normalization + checksums). Operators can run `python -m app.ingestion.cli <file>`; optional `--persist` writes `documents` and `processing_runs` when Postgres is migrated. **Phase 8** adds `POST /v1/ingest` as a thin HTTP wrapper over the same pipeline (see [API notes](docs/implementation/api-notes.md)).
-
-**Phase 3 — chunking.** Fixed-size and Markdown structure-aware strategies produce traceable domain `Chunk` rows. Optional Postgres persistence stores `chunks` with `created_by_run_id` and records a `processing_runs` row with `run_type="chunking"`. Operators run `python -m app.chunking.cli <document_uuid> --strategy fixed_size|structure_aware` or **`POST /v1/chunk`** (Phase 9). Still **no** Streamlit demo in the baseline repo path.
-
-**Phase 4A — indexing foundations.** Deterministic pseudo-embeddings (no model downloads), sparse term-frequency maps, and manifest tables `index_manifests` / `index_manifest_chunks` trace indexing runs.
-
-**Phase 4B — dense storage.** Vectors persist in **`chunk_embeddings`** (pgvector). Default provider **`deterministic_hash`**; optional **`local_sentence_transformers`** via `pip install -e ".[local-embeddings]"`. Operators run `python -m app.indexing.cli` after migrate + ingest + chunk (see [`docs/implementation/indexing-notes.md`](docs/implementation/indexing-notes.md)) or **`POST /v1/index`** (Phase 9).
-
-**Phase 5 — retrieval.** Dense (pgvector L2), baseline lexical sparse over persisted term maps, hybrid with **RRF**, and operator CLI `python -m app.retrieval.cli`. **Phase 8** adds `POST /v1/retrieve` (read-only). See [`docs/implementation/retrieval-notes.md`](docs/implementation/retrieval-notes.md). ANN indexes, Postgres FTS, reranking, and Streamlit remain optional/future.
-
-**Phase 5.5 — retrieval evaluation baseline.** Golden JSONL (e.g. `data/eval/retrieval_golden.jsonl`), Hit@k / MRR grading, JSON and optional Markdown reports, operator CLI `python -m app.evaluation.cli` (read-only DB; no new `processing_runs`). See [`docs/implementation/evaluation-notes.md`](docs/implementation/evaluation-notes.md).
-
-**Phase 6 — grounded generation (mock).** `ContextBuilder`, grounded prompt assembly, `GenerationProvider` protocol, `MockGenerationProvider`, `GroundedAnswerer.from_session`, and operator CLI `python -m app.generation.cli` (requires ingest + chunk + index; read-only DB). **Phase 8** adds `POST /v1/answer` (mock only). See [`docs/implementation/generation-notes.md`](docs/implementation/generation-notes.md).
-
-**Phase 7 — mechanical citation verification.** `verify_citations`, `CitationVerificationResult`, verification in `GroundedAnswerer`, and `citation_verification` in CLI JSON / HTTP answer response (same ingest/index prerequisites). Semantic claim verification and Streamlit remain future work.
-
-**Phase 8 — API v1 (thin).** FastAPI routes under `/v1`: ingest, documents list/detail, retrieve, answer. Embedding family defaults from `Settings` (like CLIs). **Phase 9** adds chunk, index, manifests, and optional `GET …/documents/{id}/chunks`. **No** `/v1/ask`, **no** multipart upload, **no** auth. See [`docs/implementation/api-notes.md`](docs/implementation/api-notes.md).
-
-## Phase 1: run locally
-
-### Prerequisites
-
-- Python **3.11+**
-- [Docker](https://docs.docker.com/get-docker/) (optional, for Postgres + pgvector)
-
-### Install
-
-```bash
-python -m venv .venv
-.venv\Scripts\activate   # Windows
-# source .venv/bin/activate  # Linux / macOS
-
-pip install -e ".[dev]"
-```
-
-Copy environment template (optional):
-
-```bash
-copy .env.example .env   # Windows
-# cp .env.example .env     # Linux / macOS
-```
-
-### PostgreSQL + pgvector (Docker)
-
-From the repository root:
-
-```bash
-docker compose up -d postgres
-```
-
-This starts Postgres on port **5432** with user/database `legal_rag` and enables the `vector` extension via `docker/postgres/init/`. The API **does not** require Postgres to be running for default tests or for `GET /health`.
-
-### Database migrations (when Postgres is available)
-
-Schema is managed by **Alembic** (`alembic.ini`, `migrations/`). With `DATABASE_URL` set (see `.env.example`) and Postgres running:
-
-```bash
-alembic upgrade head
-# optional:
-alembic downgrade -1
-```
-
-Migrations apply versioned DDL (including `CREATE EXTENSION IF NOT EXISTS vector` in the initial revision). They are **not** required for offline `pytest`.
-
-### API
-
-```bash
-python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
-```
-
-- OpenAPI docs: [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)
-- Health: `GET /health` → JSON with `status`, `service`, `environment`
-- Root: `GET /` → minimal metadata and pointer to `/docs`
-- **Phases 8–9 — v1:** `POST /v1/ingest`, `GET /v1/documents`, `GET /v1/documents/{document_id}`, `GET /v1/documents/{document_id}/chunks`, `POST /v1/chunk`, `POST /v1/index`, `GET /v1/index-manifests`, `GET /v1/index-manifests/{manifest_id}`, `POST /v1/retrieve`, `POST /v1/answer` (mock generation only). See [`docs/implementation/api-notes.md`](docs/implementation/api-notes.md).
-
-Recommended **HTTP pipeline** (same engine as CLI):
-
-```bash
-# 1. Ingest
-curl -s -X POST http://127.0.0.1:8000/v1/ingest \
-  -H "Content-Type: application/json" \
-  -d "{\"path\":\"data/sample_corpus/basic/intro.md\",\"persist\":true}"
-
-# 2. Chunk (substitute document_id from step 1)
-curl -s -X POST http://127.0.0.1:8000/v1/chunk \
-  -H "Content-Type: application/json" \
-  -d "{\"document_id\":\"<document_id>\",\"strategy\":\"fixed_size\",\"chunk_size\":1200,\"chunk_overlap\":200}"
-
-# 3. Index (optional embedding_* fields fall back to server Settings when omitted)
-curl -s -X POST http://127.0.0.1:8000/v1/index \
-  -H "Content-Type: application/json" \
-  -d "{\"chunking_strategy\":\"fixed_size\",\"include_dense\":true,\"include_sparse\":true}"
-
-# 4. Inspect manifests (optional)
-curl -s "http://127.0.0.1:8000/v1/index-manifests?limit=10&chunking_strategy=fixed_size"
-
-# 5. Retrieve / Answer (pin index_manifest_id when multiple manifests exist)
-curl -s -X POST http://127.0.0.1:8000/v1/retrieve \
-  -H "Content-Type: application/json" \
-  -d "{\"query\":\"What does the intro describe?\",\"mode\":\"hybrid\",\"chunking_strategy\":\"fixed_size\",\"top_k\":5,\"index_manifest_id\":\"<manifest_id>\"}"
-
-curl -s -X POST http://127.0.0.1:8000/v1/answer \
-  -H "Content-Type: application/json" \
-  -d "{\"question\":\"What does the intro describe?\",\"mode\":\"hybrid\",\"chunking_strategy\":\"fixed_size\",\"top_k\":5,\"provider\":\"mock\",\"index_manifest_id\":\"<manifest_id>\"}"
-```
-
-The same steps work via **`app.chunking.cli`** and **`app.indexing.cli`** if you prefer terminals over HTTP—see chunked sections below.
-
-**Not implemented:** `POST /v1/ask` (combined endpoint), `POST /v1/evaluate`, multipart upload.
-
-### Phase 2B: ingest a file (CLI or API)
-
-CLI (stdlib `argparse`):
-
-```bash
-python -m app.ingestion.cli data/sample_corpus/basic/intro.md
-python -m app.ingestion.cli data/sample_corpus/basic/plain.txt --json
-```
-
-With Postgres up and `alembic upgrade head` applied (adds `documents.created_by_run_id` for run lineage):
-
-```bash
-python -m app.ingestion.cli data/sample_corpus/basic/intro.md --persist
-```
-
-HTTP (Phase 8): `POST /v1/ingest` with JSON `{"path":"<local-file>","persist":true}` — see [`docs/implementation/api-notes.md`](docs/implementation/api-notes.md).
-
-Default **`pytest`** does **not** require Postgres. Targeted unit tests:
-
-```bash
-pytest tests/unit/test_ingestion_loaders.py
-pytest tests/unit/test_ingestion_service.py
-```
-
-Details: [`docs/implementation/ingestion-notes.md`](docs/implementation/ingestion-notes.md).
-
-### Phase 3: chunk a persisted document (HTTP or CLI)
-
-Requires a migrated database (including `chunks.created_by_run_id`). Ingest with `--persist` first to obtain a `document_id`.
-
-**HTTP (Phase 9):** `POST /v1/chunk` — see [`docs/implementation/api-notes.md`](docs/implementation/api-notes.md).
-
-CLI (stdlib `argparse`):
-
-```bash
-python -m app.chunking.cli <document_uuid> --strategy fixed_size --json
-python -m app.chunking.cli <document_uuid> --strategy structure_aware --json
-```
-
-Details: [`docs/implementation/chunking-notes.md`](docs/implementation/chunking-notes.md).
-
-### Phase 4A–4B: index persisted chunks (HTTP or CLI)
-
-After `alembic upgrade head`, ingest with `--persist`, then chunk at least one document.
-
-**HTTP (Phase 9):** `POST /v1/index` — optional body fields mirror `app.indexing.cli`; omitted `embedding_*` values follow server `Settings`.
-
-CLI (corpus-wide or per-strategy indexing; defaults from `EMBEDDING_PROVIDER`, `EMBEDDING_DIMENSIONS`, `EMBEDDING_MODEL` in `.env`):
-
-```bash
-python -m app.indexing.cli --chunking-strategy fixed_size --json
-python -m app.indexing.cli --json
-```
-
-Optional real local embeddings (install extra first):
-
-```bash
-python -m app.indexing.cli --chunking-strategy fixed_size \
-  --embedding-provider local_sentence_transformers \
-  --embedding-model intfloat/multilingual-e5-small --embedding-dimensions 384 --json
-```
-
-See [`docs/implementation/indexing-notes.md`](docs/implementation/indexing-notes.md).
-
-### Phase 5: retrieve chunks (CLI)
-
-After indexing, with the same Postgres and manifest filters (defaults from `.env` when auto-selecting a manifest):
-
-```bash
-python -m app.retrieval.cli "your question" --mode hybrid --json
-python -m app.retrieval.cli "keywords" --mode dense_only --top-k 5
-```
-
-Details: [`docs/implementation/retrieval-notes.md`](docs/implementation/retrieval-notes.md).
-
-### Phase 5.5: evaluate retrieval (CLI)
-
-After ingest, chunk, and indexing for the corpus under test (same Postgres + manifest filters as Phase 5):
-
-```bash
-python -m app.evaluation.cli data/eval/retrieval_golden.jsonl \
-  --mode hybrid \
-  --chunking-strategy fixed_size \
-  --top-k 5 \
-  --json
-
-python -m app.evaluation.cli data/eval/retrieval_golden.jsonl \
-  --output eval-report.json \
-  --markdown-output eval-report.md
-```
-
-Details: [`docs/implementation/evaluation-notes.md`](docs/implementation/evaluation-notes.md).
-
-### Phase 6: grounded answer (CLI)
-
-After ingest, chunk, and indexing for the corpus under test (same Postgres + manifest filters as Phase 5):
-
-```bash
-python -m app.generation.cli "What does the basic intro file describe?" \
-  --mode hybrid \
-  --chunking-strategy fixed_size \
-  --top-k 5 \
-  --provider mock \
-  --json
-```
-
-Details: [`docs/implementation/generation-notes.md`](docs/implementation/generation-notes.md).
-
-### Tests and quality
-
-```bash
-pytest
-ruff check app tests
-mypy app
-```
-
-Tests are designed to run **without** Docker, Postgres, external API keys, embeddings, or LLMs. Integration DB tests under `tests/integration/` are marked `integration` and skip unless you opt in (see [`docs/implementation/persistence-notes.md`](docs/implementation/persistence-notes.md)).
-
-## Target Stack
-
-Default v1 stack:
-
-- Python 3.11+ / 3.12;
-- FastAPI;
-- Pydantic v2;
-- Typer for CLI;
-- PostgreSQL;
-- pgvector as the default vector backend;
-- Postgres Full Text Search and/or local sparse retrieval;
-- Streamlit for the initial demo;
-- Docker Compose for local development.
-
-Qdrant is **not** part of the baseline. It may be added later as an **optional adapter**, not as the recommended default vector store.
-
-## Local-First Zero-Cost Baseline
-
-The v1 baseline should run locally with a small example corpus. Basic tests, smoke tests and the demo must not require paid external services or mandatory API keys.
-
-Recommended defaults:
-
-- local embeddings when possible;
-- mock generation for tests;
-- optional local generation through tools such as Ollama;
-- external embedding/LLM providers only behind provider interfaces.
-
-## Pipeline
+﻿# legal-rag-engine
+
+[![CI](https://github.com/link178/legal-rag-engine/actions/workflows/ci.yml/badge.svg)](https://github.com/link178/legal-rag-engine/actions/workflows/ci.yml)
+[![License: MIT](LICENSE)](LICENSE)
+![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)
+![FastAPI](https://img.shields.io/badge/API-FastAPI-009688)
+![PostgreSQL](https://img.shields.io/badge/PostgreSQL-pgvector-4169e1)
+![tests](https://img.shields.io/badge/tests-pytest-green)
+![ruff](https://img.shields.io/badge/lint-ruff-9333ea)
+![mypy](https://img.shields.io/badge/types-mypy-blue)
+
+**legal-rag-engine** is a **local-first**, **engine-first** hybrid RAG implementation with Python, FastAPI, PostgreSQL/pgvector, and Streamlit. It demonstrates document ingestion, fixed and structure-aware chunking, dense/sparse/hybrid retrieval with RRF fusion, grounded mock answers with mechanical citation verification, metadata-aware filters, and reproducible retrieval and answer evaluation.
+
+## What this is
+
+- Traceable ingestion (Markdown, TXT, HTML, PDF—text extraction only for PDF).
+- Reproducible normalization, checksums, and processing runs.
+- Comparable chunking strategies (`fixed_size`, `structure_aware`).
+- Dense retrieval (pgvector), sparse retrieval (manifest-bound lexical maps), **hybrid** with RRF.
+- Indexing manifests and optional `local_sentence_transformers` embeddings (`pip install -e ".[local-embeddings]"`).
+- Grounded **mock** generation, citations, mechanical citation verification.
+- Insufficient-context fallback.
+- Golden JSONL evaluation for retrieval and answers (CLI).
+- FastAPI `/v1/*` API and an HTTP-only Streamlit demo.
+
+## What this is not
+
+This is **not** legal advice, a compliance product, a SaaS, multi-tenant platform, AI Act assessment tool, or enterprise connector hub. The legal corpus adapter supports ingestion and retrieval experiments, not regulated legal workflows. See [docs/product/prd.md](docs/product/prd.md).
+
+## Technical highlights
+
+| Area | Notes |
+|------|--------|
+| Architecture | Engine and operator CLIs first; API is a thin wrapper. |
+| Vector store | PostgreSQL **pgvector** default; Qdrant only as a future optional adapter. |
+| Retrieval modes | `dense_only`, `sparse_only`, `hybrid` (not bare `dense` / `sparse`). |
+| Indexing CLI | Dense and sparse are **on** by default; disable with `--no-dense` / `--no-sparse`. |
+| Generation | **`mock`** only in this baseline; optional real providers belong behind extras later. |
+| Demo | Streamlit calls **`/v1/*`** via `httpx`; no direct DB access from the UI. |
+
+## Architecture
 
 ```text
 Document Sources
@@ -305,51 +47,197 @@ Document Sources
     → Chunker
     → PostgreSQL documents/chunks
     → pgvector dense index
-    → Postgres FTS / sparse local index
-    → Dense/Sparse/Hybrid Retriever
-    → RRF Fusion
-    → Optional Reranker
-    → Context Builder
-    → Grounded Generator
-    → Citation Verifier
-    → API / Streamlit Demo / Eval Reports
+    → Sparse term maps (manifest-bound)
+    → Dense / sparse / hybrid retriever + RRF
+    → Context builder
+    → Grounded generator (mock)
+    → Citation verifier
+    → API / Streamlit / Eval reports
 ```
+
+## Quickstart
+
+**Prerequisites:** Python **3.11+**, optionally [Docker](https://docs.docker.com/get-docker/) for Postgres + pgvector.
+
+```bash
+git clone <your-fork-or-mirror-url>
+cd legal-rag-engine
+
+python -m venv .venv
+# Windows (PowerShell):  .\.venv\Scripts\Activate.ps1
+# macOS / Linux:         source .venv/bin/activate
+
+pip install -e ".[dev,demo]"
+```
+
+Copy the env template (optional; defaults match `docker-compose.yml`):
+
+```bash
+copy .env.example .env    # Windows
+# cp .env.example .env    # macOS / Linux
+```
+
+Start Postgres and apply migrations:
+
+```bash
+docker compose up -d postgres
+alembic upgrade head
+```
+
+Run tests (no Docker required):
+
+```bash
+python -m pytest -q
+```
+
+Quality gates used in development:
+
+```bash
+python -m ruff check app tests
+python -m mypy app
+```
+
+## Full local smoke pipeline
+
+**Prerequisites:** `docker compose up -d postgres`, `alembic upgrade head`, and `pip install -e ".[dev,demo]"`.
+
+From the repo root:
+
+```bash
+python scripts/smoke_pipeline.py
+```
+
+This script is **operator-controlled**: it does not start Docker. It ingests `data/sample_corpus/basic` (so eval goldens resolve), imports `data/sample_corpus/legalize_sample`, chunks every persisted document with `fixed_size`, indexes, runs hybrid retrieval + mock generation on an EU-scoped question, then runs retrieval evaluation (`hybrid`) and answer evaluation (**`sparse_only`**, as required by the `answer_golden.jsonl` “Atlantis” case). It fails if any step errors or if golden `hit_rate` / `pass_rate` are zero.
+
+Re-running against the same DB may hit idempotent skips (existing chunks/manifests); the script still collects the latest manifest id from indexing output.
+
+## Run the API
+
+```bash
+python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+```
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| `GET` | `/health` | Liveness (no DB check). |
+| `GET` | `/` | Minimal metadata → `/docs`. |
+| `POST` | `/v1/ingest` | Ingest a **server-local** path. |
+| `GET` | `/v1/documents` | List documents. |
+| `GET` | `/v1/documents/{document_id}` | Document detail. |
+| `GET` | `/v1/documents/{document_id}/chunks` | Chunks for a document. |
+| `POST` | `/v1/chunk` | Chunk a persisted document. |
+| `POST` | `/v1/index` | Build index manifest + embeddings/sparse maps. |
+| `GET` | `/v1/index-manifests` | List manifests. |
+| `GET` | `/v1/index-manifests/{manifest_id}` | Manifest detail. |
+| `POST` | `/v1/retrieve` | Dense / sparse / hybrid search. |
+| `POST` | `/v1/answer` | Grounded answer (**`provider`: `mock` only**). |
+
+**Not implemented:** `POST /v1/ask`, `POST /v1/evaluate`, multipart upload, auth.
+
+Example (Linux / macOS) — ingest and pipeline (replace UUIDs from responses):
+
+```bash
+curl -s -X POST http://127.0.0.1:8000/v1/ingest \
+  -H "Content-Type: application/json" \
+  -d '{"path":"data/sample_corpus/basic/intro.md","persist":true}'
+```
+
+On **PowerShell**, `curl` may alias `Invoke-WebRequest`. Use **`Invoke-RestMethod`** or **`curl.exe`**:
+
+```powershell
+Invoke-RestMethod -Method Get -Uri http://127.0.0.1:8000/health
+```
+
+OpenAPI: [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs). Deep dive: [docs/implementation/api-notes.md](docs/implementation/api-notes.md).
+
+## Run the Streamlit demo
+
+Terminal 1 — API + DB:
+
+```bash
+docker compose up -d postgres
+alembic upgrade head
+python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+```
+
+Terminal 2 — UI:
+
+```bash
+streamlit run app/ui/streamlit_app.py
+```
+
+The demo exercises `/health`, ingestion, chunking, indexing, retrieval (optional **metadata filter**), and `/v1/answer` with **`mock`**. Details: [docs/implementation/demo-notes.md](docs/implementation/demo-notes.md).
+
+## Evaluation
+
+Goldens live under `data/eval/`. Use explicit subcommands:
+
+```bash
+python -m app.evaluation.cli retrieval data/eval/retrieval_golden.jsonl \
+  --mode hybrid --chunking-strategy fixed_size --top-k 5 --json
+
+python -m app.evaluation.cli answer data/eval/answer_golden.jsonl \
+  --mode sparse_only --chunking-strategy fixed_size --provider mock --json
+```
+
+For stable runs when multiple manifests exist, pin **`--index-manifest-id`** (see indexing JSON output or `GET /v1/index-manifests`). More detail: [docs/implementation/evaluation-notes.md](docs/implementation/evaluation-notes.md).
+
+## Legal corpus sample
+
+Example tree: **`data/sample_corpus/legalize_sample/`** (`legalize-es`, `legalize-eu`). Import:
+
+```bash
+python -m app.ingestion.adapters.legal_corpus.cli data/sample_corpus/legalize_sample --persist --json
+```
+
+Notes: [docs/implementation/legal-corpus-notes.md](docs/implementation/legal-corpus-notes.md).
+
+## Project structure (top level)
+
+```text
+app/           # Engine: ingestion, chunking, indexing, retrieval, generation, evaluation, api, ui
+data/          # Sample corpora and eval goldens (committed fixtures)
+docker/        # Postgres init (pgvector)
+docs/          # PRD, ADR, implementation notes, learning guides
+migrations/    # Alembic
+scripts/       # Operator helpers (e.g. smoke_pipeline.py)
+tests/         # Unit + opt-in integration DB tests
+```
+
+## Current status
+
+**v0.1.0** — local-first RAG engine baseline (phases **1–14**): persistence, ingestion (incl. legal adapter), chunking, pgvector indexing with manifests, hybrid retrieval + RRF, metadata filters, mock grounded answers + citation checks, eval CLIs, FastAPI v1, Streamlit demo.
+
+A detailed **phase-by-phase** digest (moved from an older README) lives in [docs/implementation/implementation-manual.md](docs/implementation/implementation-manual.md).
+
+## Limitations
+
+- **Mock generation** is the default; real LLM providers are future work behind optional extras.
+- **PDF** support is text extraction only (**no OCR**).
+- **Citation verification** is mechanical (IDs / snippets), not semantic entailment.
+- **Sparse** retrieval in v1 is manifest-bound lexical over stored term maps; **Postgres FTS** as the sparse store is future scope.
+- **Hybrid** requires indexing with sparse enabled (do not pass `--no-sparse` if you need hybrid).
+- Benchmarks assume a migrated Postgres instance; default **`pytest`** does not.
+
+## Roadmap (high level)
+
+- Optional **real** generation / cloud embedding providers (extras-only; mock remains default).
+- Richer sparse backends (e.g. Postgres FTS), rerankers, ANN tuning.
+- Combined **`POST /v1/ask`** only if it stays a thin orchestration layer.
 
 ## Documentation
 
-- Documentation index: [`docs/README.md`](docs/README.md)
-- Product PRD: [`docs/product/prd.md`](docs/product/prd.md)
-- Implementation manual: [`docs/implementation/implementation-manual.md`](docs/implementation/implementation-manual.md)
-- Persistence notes (Phase 2A): [`docs/implementation/persistence-notes.md`](docs/implementation/persistence-notes.md)
-- Ingestion notes (Phase 2B): [`docs/implementation/ingestion-notes.md`](docs/implementation/ingestion-notes.md)
-- Chunking notes (Phase 3): [`docs/implementation/chunking-notes.md`](docs/implementation/chunking-notes.md)
-- Indexing notes (Phases 4A–4B): [`docs/implementation/indexing-notes.md`](docs/implementation/indexing-notes.md)
-- Retrieval notes (Phase 5): [`docs/implementation/retrieval-notes.md`](docs/implementation/retrieval-notes.md)
-- Evaluation notes (Phase 5.5): [`docs/implementation/evaluation-notes.md`](docs/implementation/evaluation-notes.md)
-- Generation notes (Phases 6–7): [`docs/implementation/generation-notes.md`](docs/implementation/generation-notes.md)
-- API notes (Phase 8): [`docs/implementation/api-notes.md`](docs/implementation/api-notes.md)
-- Learning guide: [`docs/learning/rag-learning-guide.md`](docs/learning/rag-learning-guide.md)
-- System overview: [`docs/architecture/system-overview.md`](docs/architecture/system-overview.md)
-- ADR-0001 (local-first zero-cost baseline): [`docs/decisions/0001-local-first-zero-cost-stack.md`](docs/decisions/0001-local-first-zero-cost-stack.md)
+- Index: [docs/README.md](docs/README.md)
+- PRD: [docs/product/prd.md](docs/product/prd.md)
+- ADR-0001: [docs/decisions/0001-local-first-zero-cost-stack.md](docs/decisions/0001-local-first-zero-cost-stack.md)
+- Portfolio-oriented copy: [docs/portfolio-summary.md](docs/portfolio-summary.md)
 
-## Roadmap
+## Contributing / security / changelog
 
-1. **Bootstrap**: repo structure, config, logging, models and local Docker Compose.
-2. **Persistence foundation (Phase 2A)**: domain models, SQLAlchemy + Alembic for `documents` / `chunks` / `processing_runs`, repositories (no ingestion API yet).
-3. **Ingestion (Phase 2B)**: `.txt` / Markdown loaders, normalization, checksums, optional CLI persistence + run trace (`processing_runs`); **Phase 8** adds `POST /v1/ingest`.
-4. **Chunking (Phase 3)**: fixed-size + structure-aware strategies, chunk metadata + checksums, optional persisted chunking + run trace (`chunks.created_by_run_id`); still no embeddings/retrieval/generation API.
-5. **Indexing (Phases 4A–4B)**: deterministic + optional local embeddings; manifest tables; **`chunk_embeddings`** with pgvector; CLI (see indexing notes).
-6. **Retrieval (Phase 5)**: dense pgvector search, baseline sparse over manifest term JSON, hybrid + RRF; operator CLI (see retrieval notes). Postgres FTS / ANN indexes optional later.
-7. **Retrieval evaluation baseline (Phase 5.5)**: golden JSONL, Hit@k/MRR, JSON/Markdown reports; operator CLI (see evaluation notes). No generation or `/v1/evaluate`.
-8. **Sparse retrieval storage (future)**: Postgres FTS / GIN as designed; Phase 5 sparse is manifest-bound lexical baseline only.
-9. **Grounded generation (Phase 6)**: context builder + mock `GenerationProvider` + operator CLI (see generation notes). **Phase 8** adds `POST /v1/answer` (mock only). Combined `POST /v1/ask` and external LLMs remain future milestones.
-10. **Mechanical citation verification (Phase 7)**: `verify_citations` + `GroundedAnswer.citation_verification` + CLI / HTTP answer JSON (see generation notes).
-11. **API v1 thin layer (Phase 8)**: `POST /v1/retrieve` + `POST /v1/answer` + documents + ingest ([`api-notes.md`](docs/implementation/api-notes.md)); no `/v1/ask`, no chunk/index HTTP.
-12. **End-to-end evaluation**: claim-level metrics, reproducible reports beyond retrieval-only mechanical checks.
-13. **Demo and polish**: Streamlit demo, seed scripts, smoke tests and documentation cleanup.
+- [CONTRIBUTING.md](CONTRIBUTING.md)
+- [SECURITY.md](SECURITY.md)
+- [CHANGELOG.md](CHANGELOG.md)
 
-## Explicit Exclusions
+## License
 
-The public repo does not include proprietary AI Act taxonomy, commercial regulatory scoring, multi-tenant workflows, users/organizations, billing, SSO, premium evidence packs, enterprise dashboards, private connectors or advanced due-diligence logic.
-
-Baseline stack boundaries are defined in ADR-0001 (linked under Documentation above).
+[MIT License](LICENSE).
