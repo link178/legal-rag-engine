@@ -1,0 +1,3 @@
+{"id":"q1","question":"What does the basic intro file describe?","expected_terms":["markdown","sample"],"expected_source_paths":["intro.md"],"notes":"Targets data/sample_corpus/basic/intro.md."}
+{"id":"q2","question":"Which file contains the plain UTF-8 hello message?","expected_terms":["plain","hello"],"expected_source_paths":["plain.txt"],"notes":"Targets data/sample_corpus/basic/plain.txt."}
+{"id":"q3","question":"Which phase does the plain text sample mention for ingestion tests?","expected_terms":["phase","ingestion"],"expected_source_paths":["plain.txt"],"notes":"Targets Phase 2B wording in plain.txt."}

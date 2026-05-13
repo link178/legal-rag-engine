@@ -216,3 +216,15 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Legal RAG Engine — local runtime data and logs
+logs/
+reports/
+*.sqlite
+*.sqlite-journal
+data/local/
+
+# OS / editor cruft (common)
+.DS_Store
+Thumbs.db
+Desktop.ini
