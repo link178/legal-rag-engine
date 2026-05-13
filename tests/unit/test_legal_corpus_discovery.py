@@ -65,6 +65,7 @@ def test_scan_skips_hidden_files(tmp_path) -> None:
 @pytest.mark.skipif(sys.platform == "win32", reason="symlink privileges vary on Windows")
 def test_scan_skips_symlinks(tmp_path) -> None:
     root = tmp_path / "corp"
+    root.mkdir()
     (root / "t.txt").write_text("hello", encoding="utf-8")
     link = root / "linked.txt"
     try:
