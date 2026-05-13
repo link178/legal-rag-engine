@@ -13,7 +13,7 @@
 - Generation notes (Phases 6–7 + HTTP): `implementation/generation-notes.md`
 - API notes (Phases 8–9 FastAPI v1 thin wrapper): `implementation/api-notes.md`
 - Streamlit demo (Phase 10): `implementation/demo-notes.md`
-- Learning guide: `learning/rag-learning-guide.md` (see also `learning/legal-rag-learning-guide-detailed.md`)
+- Learning guide: `learning/rag-learning-guide.md`
 - System overview: `architecture/system-overview.md`
 - ADR-0001 — local-first zero-cost baseline: `decisions/0001-local-first-zero-cost-stack.md`
 
