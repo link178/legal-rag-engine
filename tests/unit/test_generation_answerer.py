@@ -197,6 +197,7 @@ def test_insufficient_when_provider_returns_sentinel(manifest) -> None:
     assert cv is not None
     assert cv.has_citations is False
     assert cv.available_citation_ids == (1,)
+    assert out.metadata.get("evidence_sufficient") is True
 
 
 def test_irrelevant_retrieved_context_is_insufficient(manifest) -> None:

@@ -148,6 +148,7 @@ class GroundedAnswerer:
                     "prompt_chars": len(prompt),
                     "citation_validity_rate": vacuity.citation_validity_rate,
                     "has_invalid_citations": vacuity.has_invalid_citations,
+                    "evidence_sufficient": True,
                 },
                 citation_verification=vacuity,
             )
