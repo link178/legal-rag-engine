@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Local-first hybrid RAG engine with pgvector, citation verification and reproducible evaluation."
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "See LICENSE file in repository root" }
+license = { text = "MIT" }
 authors = [{ name = "Legal RAG Engine contributors" }]
 dependencies = [
     "alembic>=1.14",

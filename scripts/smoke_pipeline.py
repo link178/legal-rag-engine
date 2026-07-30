@@ -16,11 +16,14 @@ Steps:
 - Hybrid retrieval + mock generation on an EU demo question.
 - Retrieval + answer evaluation JSONL (answer eval uses ``sparse_only`` for golden q3).
 
-Exit code is non-zero if any subprocess fails or golden rates are zero.
+Exit code is non-zero if any subprocess fails or if retrieval/answer
+evaluation ``execution_status`` is not ``PASSED`` (partial pass rates such as
+0.667 are failures).
 """
 
 from __future__ import annotations
 
+import argparse
 import json
 import socket
 import subprocess
@@ -28,9 +31,28 @@ import sys
 from collections.abc import Iterable
 from pathlib import Path
 
+_REQUIRED_EXECUTION_STATUS = "PASSED"
+
 
 def _repo_root() -> Path:
     return Path(__file__).resolve().parent.parent
+
+
+def _parse_args(argv: list[str] | None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="End-to-end smoke pipeline for local Postgres (operator-controlled).",
+    )
+    parser.add_argument(
+        "--manifest-out",
+        type=str,
+        default=None,
+        dest="manifest_out",
+        help=(
+            "Write the smoke-created index manifest UUID to this path "
+            "(one line, UUID only) for gated evaluation handoff"
+        ),
+    )
+    return parser.parse_args(argv)
 
 
 def run_json(cmd: list[str], *, cwd: Path) -> dict[str, object]:
@@ -123,7 +145,7 @@ def _require_listening_tcp(host: str, port: int, *, timeout: float = 2.0) -> Non
 
 
 def main(argv: list[str] | None = None) -> int:
-    _ = argv
+    args = _parse_args(argv)
     try:
         _require_listening_tcp("127.0.0.1", 5432, timeout=2.0)
     except OSError as e:
@@ -143,6 +165,8 @@ def main(argv: list[str] | None = None) -> int:
     print("== Ingest basic sample (eval goldens) ==")
     intro = basic_dir / "intro.md"
     plain = basic_dir / "plain.txt"
+    policies = basic_dir / "policies.md"
+    html = basic_dir / "sample.html"
     intro_p = run_json(
         [py, "-m", "app.ingestion.cli", str(intro), "--persist", "--json"],
         cwd=root,
@@ -153,6 +177,16 @@ def main(argv: list[str] | None = None) -> int:
         cwd=root,
     )
     _require_no_error(plain_p, step="ingest plain.txt")
+    policies_p = run_json(
+        [py, "-m", "app.ingestion.cli", str(policies), "--persist", "--json"],
+        cwd=root,
+    )
+    _require_no_error(policies_p, step="ingest policies.md")
+    html_p = run_json(
+        [py, "-m", "app.ingestion.cli", str(html), "--persist", "--json"],
+        cwd=root,
+    )
+    _require_no_error(html_p, step="ingest sample.html")
 
     print("== Legal corpus import ==")
     legal_summary = run_json(
@@ -170,7 +204,7 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(legal_summary, indent=2), file=sys.stderr)
         return 1
 
-    doc_ids = _collect_document_ids(intro_p, plain_p)
+    doc_ids = _collect_document_ids(intro_p, plain_p, policies_p, html_p)
     doc_ids.extend(_document_ids_from_corpus_summary(legal_summary))
     doc_ids = _dedupe_preserve_order(doc_ids)
     if not doc_ids:
@@ -190,6 +224,10 @@ def main(argv: list[str] | None = None) -> int:
     if not isinstance(mid, str) or not mid:
         print(json.dumps(idx, indent=2), file=sys.stderr)
         return 1
+
+    if args.manifest_out:
+        out_path = Path(args.manifest_out)
+        out_path.write_text(mid + "\n", encoding="utf-8")
 
     q_demo = "What does the demo AI Act fragment describe?"
     print("== Retrieval (hybrid, EU filter) ==")
@@ -251,12 +289,13 @@ def main(argv: list[str] | None = None) -> int:
             "fixed_size",
             "--index-manifest-id",
             mid,
+            "--no-gate",
             "--json",
         ],
         cwd=root,
     )
 
-    print("== Evaluation: answer (sparse_only; golden q3) ==")
+    print("== Evaluation: answer (sparse_only; golden insufficient-context cases) ==")
     ans_eval = run_json(
         [
             py,
@@ -272,6 +311,7 @@ def main(argv: list[str] | None = None) -> int:
             "mock",
             "--index-manifest-id",
             mid,
+            "--no-gate",
             "--json",
         ],
         cwd=root,
@@ -279,20 +319,60 @@ def main(argv: list[str] | None = None) -> int:
 
     rsum = ret_eval.get("summary")
     asum = ans_eval.get("summary")
-    hit_rate = rsum.get("hit_rate") if isinstance(rsum, dict) else None
-    pass_rate = asum.get("pass_rate") if isinstance(asum, dict) else None
+    if not isinstance(rsum, dict) or not isinstance(asum, dict):
+        print("error: evaluation summary missing or malformed", file=sys.stderr)
+        return 1
+
+    ret_manifest = ret_eval.get("manifest")
+    ans_manifest = ans_eval.get("manifest")
+    ret_mid = ret_manifest.get("id") if isinstance(ret_manifest, dict) else None
+    ans_mid = ans_manifest.get("id") if isinstance(ans_manifest, dict) else None
+    if ret_mid != mid or ans_mid != mid:
+        print(
+            "error: evaluation did not use the smoke-created manifest "
+            f"(expected={mid!r}, retrieval={ret_mid!r}, answer={ans_mid!r})",
+            file=sys.stderr,
+        )
+        return 1
+
+    hit_rate = rsum.get("hit_rate")
+    pass_rate = asum.get("pass_rate")
+    ret_status = rsum.get("execution_status")
+    ans_status = asum.get("execution_status")
+    ret_total = rsum.get("total_questions")
+    ans_total = asum.get("total_questions")
 
     print("\n== Summary ==")
     print(f"manifest_id={mid}")
+    print(f"evaluation_manifest_id={mid}")
     print(f"documents_chunked={len(doc_ids)}")
-    print(f"retrieval hit_rate={hit_rate}")
-    print(f"answer pass_rate={pass_rate}")
+    print(f"retrieval execution_status={ret_status} hit_rate={hit_rate} total={ret_total}")
+    print(f"answer execution_status={ans_status} pass_rate={pass_rate} total={ans_total}")
 
     if hit_rate is None or pass_rate is None:
+        print("error: missing hit_rate or pass_rate in evaluation summary", file=sys.stderr)
         return 1
-    if float(hit_rate) <= 0 or float(pass_rate) <= 0:
-        print("expected non-zero hit_rate and pass_rate", file=sys.stderr)
-        print(json.dumps({"retrieval": ret_eval, "answer": ans_eval}, indent=2)[:8000])
+    if not isinstance(ret_total, int) or ret_total <= 0:
+        print("error: retrieval evaluation has no questions", file=sys.stderr)
+        return 1
+    if not isinstance(ans_total, int) or ans_total <= 0:
+        print("error: answer evaluation has no questions", file=sys.stderr)
+        return 1
+    if ret_status != _REQUIRED_EXECUTION_STATUS:
+        print(
+            f"error: retrieval evaluation status {ret_status!r} "
+            f"(required {_REQUIRED_EXECUTION_STATUS!r}); hit_rate={hit_rate}",
+            file=sys.stderr,
+        )
+        print(json.dumps({"retrieval": ret_eval}, indent=2)[:8000])
+        return 1
+    if ans_status != _REQUIRED_EXECUTION_STATUS:
+        print(
+            f"error: answer evaluation status {ans_status!r} "
+            f"(required {_REQUIRED_EXECUTION_STATUS!r}); pass_rate={pass_rate}",
+            file=sys.stderr,
+        )
+        print(json.dumps({"answer": ans_eval}, indent=2)[:8000])
         return 1
 
     return 0

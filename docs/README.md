@@ -1,6 +1,7 @@
 # Documentation Index
 
 - **Portfolio summary:** `portfolio-summary.md`
+- **Evaluation snapshot (regenerated evidence):** `evaluation-snapshot.md`
 - Product PRD: `product/prd.md`
 - Implementation manual: `implementation/implementation-manual.md` (includes **Phase status digest** for milestones 1–14)
 - Persistence notes (Phase 2A): `implementation/persistence-notes.md`

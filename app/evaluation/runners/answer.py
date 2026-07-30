@@ -16,6 +16,7 @@ from app.evaluation.models import (
     AnswerEvaluationSummary,
     AnswerGoldenQuestion,
 )
+from app.evaluation.status import derive_answer_execution_status
 from app.generation.answerer import GroundedAnswerer
 from app.generation.context import ContextBuilder
 from app.generation.providers import MockGenerationProvider
@@ -276,6 +277,7 @@ class AnswerEvaluationRunner:
             tup,
             golden_has_terms=gt_has_terms,
         )
+        status = derive_answer_execution_status(tup, total_questions=total)
         return AnswerEvaluationSummary(
             schema_version="evaluation.answer.v1",
             created_at=created_at,
@@ -291,4 +293,5 @@ class AnswerEvaluationRunner:
             insufficient_context_accuracy=isa,
             retrieved_expected_source_rate=rsa,
             items=tup,
+            execution_status=status,
         )

@@ -1,33 +1,138 @@
 ﻿# legal-rag-engine
 
+Local-first hybrid RAG and evaluation engine with FastAPI, PostgreSQL/pgvector, and Streamlit.
+
 [![CI](https://github.com/link178/legal-rag-engine/actions/workflows/ci.yml/badge.svg)](https://github.com/link178/legal-rag-engine/actions/workflows/ci.yml)
-[![License: MIT](LICENSE)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 ![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)
-![FastAPI](https://img.shields.io/badge/API-FastAPI-009688)
-![PostgreSQL](https://img.shields.io/badge/PostgreSQL-pgvector-4169e1)
-![tests](https://img.shields.io/badge/tests-pytest-green)
-![ruff](https://img.shields.io/badge/lint-ruff-9333ea)
-![mypy](https://img.shields.io/badge/types-mypy-blue)
 
-**legal-rag-engine** is a **local-first**, **engine-first** hybrid RAG implementation with Python, FastAPI, PostgreSQL/pgvector, and Streamlit. It demonstrates document ingestion, fixed and structure-aware chunking, dense/sparse/hybrid retrieval with RRF fusion, grounded mock answers with mechanical citation verification, metadata-aware filters, and reproducible retrieval and answer evaluation.
+**legal-rag-engine** is a local-first hybrid RAG pipeline: ingest documents, persist them with checksums and processing runs, chunk with comparable strategies, index dense (pgvector) and sparse (manifest-bound lexical maps) representations, retrieve with dense / sparse / hybrid RRF, and answer with grounded mock generation plus mechanical citation verification. Evaluation is first-class: golden JSONL datasets and operator CLIs measure retrieval Hit@k / MRR and answer pass rates against the same Postgres read path.
 
-## What this is
+It is an engineering reference for how reliable RAG systems are built—traceability, comparable retrieval modes, grounded outputs, citation checks, deterministic evaluation, and controlled insufficient-context behavior—not legal advice, a compliance product, or a multi-tenant SaaS. See [docs/product/prd.md](docs/product/prd.md).
 
-- Traceable ingestion (Markdown, TXT, HTML, PDF—text extraction only for PDF).
-- Reproducible normalization, checksums, and processing runs.
-- Comparable chunking strategies (`fixed_size`, `structure_aware`).
-- Dense retrieval (pgvector), sparse retrieval (manifest-bound lexical maps), **hybrid** with RRF.
-- Indexing manifests and optional `local_sentence_transformers` embeddings (`pip install -e ".[local-embeddings]"`).
-- Grounded **mock** generation, citations, mechanical citation verification.
-- Insufficient-context fallback.
-- Golden JSONL evaluation for retrieval and answers (CLI).
-- FastAPI `/v1/*` API and an HTTP-only Streamlit demo.
+## Why this project
 
-## What this is not
+Public RAG demos often stop at “embed and chat.” Reliable retrieval and grounded answers depend on harder engineering: ingestion that can be audited, chunking that can be compared, indexes that are reproducible, retrieval modes that are explicit, generation that cites evidence, citation verification that is testable, evaluation that is deterministic, and a clear path when context is insufficient. This repository makes those pieces concrete and runnable locally without paid APIs.
 
-This is **not** legal advice, a compliance product, a SaaS, multi-tenant platform, AI Act assessment tool, or enterprise connector hub. The legal corpus adapter supports ingestion and retrieval experiments, not regulated legal workflows. See [docs/product/prd.md](docs/product/prd.md).
+## What it demonstrates
 
-## Technical highlights
+- Engine-first design: domain services and operator CLIs first; FastAPI and Streamlit are thin consumers.
+- Traceable ingestion for Markdown, TXT, HTML, and PDF (text extraction only), plus a `legalize-*` corpus adapter.
+- Comparable chunking (`fixed_size`, `structure_aware`) with config hashing.
+- Dense retrieval (pgvector), sparse retrieval (manifest-bound term maps), and hybrid fusion via Reciprocal Rank Fusion (RRF).
+- Indexing manifests as the unit of reproducibility for “what was indexed.”
+- Grounded **mock** generation, mechanical citation verification, and insufficient-context fallback.
+- Deterministic golden evaluation for retrieval and answers (CLI), plus CI gates (repository-wide Ruff, Mypy on `app`, isolated integration pytest DB, and a separate reliability DB for smoke + gated evaluation on the explicit smoke manifest).
+
+## Architecture
+
+```mermaid
+flowchart LR
+  subgraph sources [Sources]
+    MD[Markdown / TXT]
+    HTML[HTML]
+    PDF[PDF text extract]
+    LEGAL[legalize-* adapter]
+  end
+
+  subgraph ingest [Ingestion]
+    LOAD[Loaders / parsers]
+    NORM[Normalizer + checksums]
+  end
+
+  subgraph store [PostgreSQL]
+    DOCS[(documents / chunks)]
+    RUNS[(processing_runs)]
+    DENSE[(pgvector embeddings)]
+    SPARSE[(sparse term maps)]
+    MAN[(index_manifests)]
+  end
+
+  subgraph retrieve [Retrieval]
+    DRET[Dense retriever]
+    SRET[Sparse retriever]
+    RRF[Hybrid RRF fusion]
+    FILT[Metadata filters]
+  end
+
+  subgraph generate [Generation]
+    CTX[Context builder]
+    GEN[Grounded generator mock]
+    CIT[Citation verifier]
+  end
+
+  subgraph delivery [Consumers]
+    API[FastAPI /v1]
+    UI[Streamlit demo]
+    EVAL[Eval CLIs / reports]
+  end
+
+  MD --> LOAD
+  HTML --> LOAD
+  PDF --> LOAD
+  LEGAL --> LOAD
+  LOAD --> NORM
+  NORM --> DOCS
+  NORM --> RUNS
+  DOCS --> CHUNK[Chunker fixed_size / structure_aware]
+  CHUNK --> DOCS
+  DOCS --> IDX[Indexer]
+  IDX --> DENSE
+  IDX --> SPARSE
+  IDX --> MAN
+  MAN --> DRET
+  MAN --> SRET
+  DENSE --> DRET
+  SPARSE --> SRET
+  DRET --> RRF
+  SRET --> RRF
+  FILT --> DRET
+  FILT --> SRET
+  RRF --> CTX
+  DRET --> CTX
+  SRET --> CTX
+  CTX --> GEN
+  GEN --> CIT
+  CIT --> API
+  CIT --> UI
+  CIT --> EVAL
+  RRF --> EVAL
+```
+
+Text equivalent of the same pipeline:
+
+```text
+Document sources → loaders / parsers → normalizer
+  → PostgreSQL documents / chunks / processing_runs
+  → chunker (fixed_size | structure_aware)
+  → indexer → pgvector dense + sparse term maps + index manifest
+  → dense / sparse / hybrid (RRF) + metadata filters
+  → context builder → grounded mock generator → citation verifier
+  → FastAPI / Streamlit / evaluation reports
+```
+
+## Evaluation snapshot
+
+Regression evidence for the committed baseline on branch **`develop`**: evaluation execution gates, CI database isolation, explicit-manifest smoke/eval, content-stable ranking tie-breaks, Streamlit pin lifecycle fix, and README demo screenshots. GitHub Actions **ci** workflow (three parallel jobs) is **green** on the latest `develop` push; default pytest and reliability gates match the figures below. Full command log, CI run link, and historical baselines: [docs/evaluation-snapshot.md](docs/evaluation-snapshot.md).
+
+| Check | Result |
+|-------|--------|
+| Default pytest (`python -m pytest -q`, no DB opt-in) | **422 passed**, **14 skipped** |
+| Full DB-backed pytest (CI `integration-tests` on Ubuntu) | **436 passed**, **0 skipped** |
+| Full DB-backed pytest (Windows local, integration DB) | **435 passed**, **1 skipped** (symlink privilege test) |
+| Ruff (`python -m ruff check .`) | **passed** |
+| Mypy (`python -m mypy` / `python -m mypy app`) | **passed** — validates the configured production package scope (`app`) |
+| Smoke pipeline (`scripts/smoke_pipeline.py --manifest-out …`) | **passed** (exit 0); 7 documents chunked; retrieval and answer `execution_status=PASSED` |
+| Retrieval eval | dataset **9** questions; mode `hybrid`; chunking `fixed_size`; top-k **5**; embedding `deterministic_hash` (16-d); **hit_rate = 1.0**; **MRR = 0.75**; **execution_status = PASSED** (explicit smoke manifest) |
+| Answer eval | dataset **10** questions; mode `sparse_only`; provider `mock`; **pass_rate = 1.0** (10/10); **`q3_unknown_insufficient` → insufficient_context**; **execution_status = PASSED** (explicit smoke manifest) |
+
+**CI isolation:** integration pytest and reliability smoke/eval use **separate databases**. Metrics are produced only from the smoke-created manifest (`--manifest-out` → `--index-manifest-id`). Integration-test artifacts cannot affect evaluation metrics.
+
+**Historical baseline** (pre-reliability-gate / pre-isolation): answer pass_rate **0.667** (2/3) with smoke exit 0 despite a failed golden case; MRR **0.7314814814814814** before DB isolation and stable ranking ties—superseded by the reproducible **0.75** baseline above.
+
+These figures use a migrated Postgres instance after `alembic upgrade head`. They are wiring and regression evidence on the sample corpus—not a large-benchmark claim. Dense embeddings in this baseline are `deterministic_hash`, not semantic models.
+
+## Main capabilities
 
 | Area | Notes |
 |------|--------|
@@ -37,30 +142,14 @@ This is **not** legal advice, a compliance product, a SaaS, multi-tenant platfor
 | Indexing CLI | Dense and sparse are **on** by default; disable with `--no-dense` / `--no-sparse`. |
 | Generation | **`mock`** only in this baseline; optional real providers belong behind extras later. |
 | Demo | Streamlit calls **`/v1/*`** via `httpx`; no direct DB access from the UI. |
-
-## Architecture
-
-```text
-Document Sources
-    → Loaders / Parsers
-    → Normalizer
-    → Chunker
-    → PostgreSQL documents/chunks
-    → pgvector dense index
-    → Sparse term maps (manifest-bound)
-    → Dense / sparse / hybrid retriever + RRF
-    → Context builder
-    → Grounded generator (mock)
-    → Citation verifier
-    → API / Streamlit / Eval reports
-```
+| Filters | Exact-match metadata filters on document JSON (retrieval, generation, evaluation, Streamlit). |
 
 ## Quickstart
 
 **Prerequisites:** Python **3.11+**, optionally [Docker](https://docs.docker.com/get-docker/) for Postgres + pgvector.
 
 ```bash
-git clone <your-fork-or-mirror-url>
+git clone https://github.com/link178/legal-rag-engine.git
 cd legal-rag-engine
 
 python -m venv .venv
@@ -84,34 +173,54 @@ docker compose up -d postgres
 alembic upgrade head
 ```
 
-Run tests (no Docker required):
+Default local suite (no Docker required; DB integration tests are skipped without opt-in):
 
 ```bash
 python -m pytest -q
 ```
 
-Quality gates used in development:
+Full DB-backed suite (requires Postgres + migrations; prefer a dedicated integration database so reliability metrics stay clean):
 
 ```bash
-python -m ruff check app tests
-python -m mypy app
+# Windows PowerShell:
+$env:LEGAL_RAG_RUN_INTEGRATION_DB = "1"
+$env:DATABASE_URL = "postgresql+psycopg://legal_rag:legal_rag@localhost:5432/legal_rag_integration"
+python -m alembic upgrade head
+python -m pytest -q
 ```
 
-## Full local smoke pipeline
+Quality gates used in development and CI:
 
-**Prerequisites:** `docker compose up -d postgres`, `alembic upgrade head`, and `pip install -e ".[dev,demo]"`.
+```bash
+python -m ruff check .   # repository-wide; mandatory
+python -m mypy           # configured production package scope (`app`)
+python -m mypy app       # equivalent explicit path
+```
+
+### Full local smoke pipeline
+
+**Prerequisites:** `docker compose up -d postgres`, `alembic upgrade head` on a **reliability-only** (or clean) database, and `pip install -e ".[dev,demo]"`. Do not run smoke/gated eval against a database that just ran integration pytest.
 
 From the repo root:
 
 ```bash
-python scripts/smoke_pipeline.py
+python scripts/smoke_pipeline.py --manifest-out smoke_manifest_id.txt
 ```
 
-This script is **operator-controlled**: it does not start Docker. It ingests `data/sample_corpus/basic` (so eval goldens resolve), imports `data/sample_corpus/legalize_sample`, chunks every persisted document with `fixed_size`, indexes, runs hybrid retrieval + mock generation on an EU-scoped question, then runs retrieval evaluation (`hybrid`) and answer evaluation (**`sparse_only`**, as required by the `answer_golden.jsonl` “Atlantis” case). It fails if any step errors or if golden `hit_rate` / `pass_rate` are zero.
+Then gated evaluation (same explicit manifest):
 
-Re-running against the same DB may hit idempotent skips (existing chunks/manifests); the script still collects the latest manifest id from indexing output.
+```bash
+# Windows PowerShell example:
+$mid = (Get-Content smoke_manifest_id.txt -Raw).Trim()
+python -m app.evaluation.cli retrieval data/eval/retrieval_golden.jsonl --mode hybrid --chunking-strategy fixed_size --top-k 5 --index-manifest-id $mid --json
+python -m app.evaluation.cli answer data/eval/answer_golden.jsonl --mode sparse_only --chunking-strategy fixed_size --provider mock --index-manifest-id $mid --json
+```
 
-## Run the API
+This script is **operator-controlled**: it does not start Docker. It ingests `data/sample_corpus/basic` (so eval goldens resolve), imports `data/sample_corpus/legalize_sample`, chunks every persisted document with `fixed_size`, indexes, runs hybrid retrieval + mock generation on an EU-scoped question, then runs retrieval evaluation (`hybrid`) and answer evaluation (`sparse_only`, `mock`) against the **same** created manifest. It fails if any step errors or if evaluation `execution_status` is not `PASSED` (partial pass rates such as 0.667 are failures).
+
+## API and demo usage
+
+### Run the API
 
 ```bash
 python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
@@ -150,7 +259,7 @@ Invoke-RestMethod -Method Get -Uri http://127.0.0.1:8000/health
 
 OpenAPI: [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs). Deep dive: [docs/implementation/api-notes.md](docs/implementation/api-notes.md).
 
-## Run the Streamlit demo
+### Run the Streamlit demo
 
 Terminal 1 — API + DB:
 
@@ -168,9 +277,24 @@ streamlit run app/ui/streamlit_app.py
 
 The demo exercises `/health`, ingestion, chunking, indexing, retrieval (optional **metadata filter**), and `/v1/answer` with **`mock`**. Details: [docs/implementation/demo-notes.md](docs/implementation/demo-notes.md).
 
-## Evaluation
+### Streamlit demo
 
-Goldens live under `data/eval/`. Use explicit subcommands:
+The Streamlit client exercises the FastAPI pipeline end to end using an
+explicitly pinned index manifest. This example performs hybrid retrieval,
+returns a grounded deterministic answer, and mechanically verifies all used
+citation identifiers.
+
+![Streamlit demo showing a grounded hybrid answer](docs/assets/demo-answer-overview.png)
+
+The verification output distinguishes used, available, valid, invalid,
+duplicate, and unused citation identifiers. In this execution, all three used
+citations were valid and no invalid citations were produced.
+
+![Mechanical citation verification with a 1.0 validity rate](docs/assets/demo-citation-verification.png)
+
+## Reproducible evaluation
+
+Goldens live under `data/eval/` (9 retrieval questions, 10 answer questions). Use explicit subcommands after ingest → chunk → index on a migrated Postgres instance:
 
 ```bash
 python -m app.evaluation.cli retrieval data/eval/retrieval_golden.jsonl \
@@ -180,9 +304,15 @@ python -m app.evaluation.cli answer data/eval/answer_golden.jsonl \
   --mode sparse_only --chunking-strategy fixed_size --provider mock --json
 ```
 
-For stable runs when multiple manifests exist, pin **`--index-manifest-id`** (see indexing JSON output or `GET /v1/index-manifests`). More detail: [docs/implementation/evaluation-notes.md](docs/implementation/evaluation-notes.md).
+For stable runs when multiple manifests exist, pin **`--index-manifest-id`** (see indexing JSON output or `GET /v1/index-manifests`). Or run the full operator path:
 
-## Legal corpus sample
+```bash
+python scripts/smoke_pipeline.py
+```
+
+More detail: [docs/implementation/evaluation-notes.md](docs/implementation/evaluation-notes.md) and [docs/evaluation-snapshot.md](docs/evaluation-snapshot.md).
+
+### Legal corpus sample
 
 Example tree: **`data/sample_corpus/legalize_sample/`** (`legalize-es`, `legalize-eu`). Import:
 
@@ -192,34 +322,34 @@ python -m app.ingestion.adapters.legal_corpus.cli data/sample_corpus/legalize_sa
 
 Notes: [docs/implementation/legal-corpus-notes.md](docs/implementation/legal-corpus-notes.md).
 
-## Project structure (top level)
+## Project structure
 
 ```text
 app/           # Engine: ingestion, chunking, indexing, retrieval, generation, evaluation, api, ui
 data/          # Sample corpora and eval goldens (committed fixtures)
 docker/        # Postgres init (pgvector)
-docs/          # PRD, ADR, implementation notes, learning guides
+docs/          # PRD, ADR, implementation notes, evaluation snapshot, learning guides
 migrations/    # Alembic
 scripts/       # Operator helpers (e.g. smoke_pipeline.py)
 tests/         # Unit + opt-in integration DB tests
 ```
 
-## Current status
-
 **v0.1.0** — local-first RAG engine baseline (phases **1–14**): persistence, ingestion (incl. legal adapter), chunking, pgvector indexing with manifests, hybrid retrieval + RRF, metadata filters, mock grounded answers + citation checks, eval CLIs, FastAPI v1, Streamlit demo.
 
-A detailed **phase-by-phase** digest (moved from an older README) lives in [docs/implementation/implementation-manual.md](docs/implementation/implementation-manual.md).
+A detailed phase-by-phase digest lives in [docs/implementation/implementation-manual.md](docs/implementation/implementation-manual.md).
 
-## Limitations
+## Deliberate limitations
 
 - **Mock generation** is the default; real LLM providers are future work behind optional extras.
 - **PDF** support is text extraction only (**no OCR**).
 - **Citation verification** is mechanical (IDs / snippets), not semantic entailment.
 - **Sparse** retrieval in v1 is manifest-bound lexical over stored term maps; **Postgres FTS** as the sparse store is future scope.
 - **Hybrid** requires indexing with sparse enabled (do not pass `--no-sparse` if you need hybrid).
-- Benchmarks assume a migrated Postgres instance; default **`pytest`** does not.
+- Default dense embeddings are **`deterministic_hash`** (reproducible wiring), not a semantic embedding model unless you opt into `local-embeddings`.
+- Benchmarks assume a migrated Postgres instance; default **`pytest`** does not run integration DB tests.
+- Intentionally out of scope for this public baseline: auth, multi-tenant SaaS, `POST /v1/ask`, upload APIs, and compliance / AI Act product logic.
 
-## Roadmap (high level)
+## Roadmap
 
 - Optional **real** generation / cloud embedding providers (extras-only; mock remains default).
 - Richer sparse backends (e.g. Postgres FTS), rerankers, ANN tuning.
@@ -228,6 +358,7 @@ A detailed **phase-by-phase** digest (moved from an older README) lives in [docs
 ## Documentation
 
 - Index: [docs/README.md](docs/README.md)
+- Evaluation snapshot: [docs/evaluation-snapshot.md](docs/evaluation-snapshot.md)
 - PRD: [docs/product/prd.md](docs/product/prd.md)
 - ADR-0001: [docs/decisions/0001-local-first-zero-cost-stack.md](docs/decisions/0001-local-first-zero-cost-stack.md)
 - Portfolio-oriented copy: [docs/portfolio-summary.md](docs/portfolio-summary.md)
