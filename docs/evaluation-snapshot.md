@@ -1,14 +1,38 @@
 # Evaluation snapshot
 
-UTC generation timestamp: **2026-07-29T14:00:00Z** (local validation after CI database isolation + explicit manifest gates)
+UTC generation timestamp: **2026-07-30T12:00:00Z** (post-commit validation on branch `develop`)
 
-Git commit at capture time: **`96d4c8e009f8503648fd0f1e907f23b988d6c9eb`** (`96d4c8e` on branch `develop`), with **uncommitted** CI isolation, explicit-manifest, and ranking-tie-break fixes in the working tree.
+Validated commit: **`a9c697745a060dc692ecfb93c18a3b006f88f994`** (`a9c6977` on `develop`).
 
-This file records checks executed in one local session. Metrics are copied from tool output only. No estimated figures.
+This file records checks executed after the reliability implementation landed on `develop`. Metrics are copied from tool output only. No estimated figures.
+
+## Committed baseline (branch `develop`)
+
+The following are **committed and remotely validated** on `develop`:
+
+- Evaluation execution gates (`execution_status`, default CLI exit codes, `--no-gate`)
+- CI database isolation (separate integration vs reliability Postgres databases)
+- Explicit-manifest smoke/eval (`--manifest-out` → `--index-manifest-id`)
+- Content-stable ranking tie-breaks (`source_path`, `chunk_index`)
+- Streamlit pin widget lifecycle fix (pending pin queue + UI state tests)
+- Demo screenshots embedded in README (`docs/assets/demo-answer-overview.png`, `docs/assets/demo-citation-verification.png`)
+
+## GitHub Actions (remote)
+
+Latest successful **ci** workflow run for `develop`:
+
+| Field | Value |
+|-------|--------|
+| Run | [#10](https://github.com/link178/legal-rag-engine/actions/runs/30532189588) |
+| Commit | `a9c6977` |
+| Conclusion | **success** |
+| Jobs | `lint-typecheck-test`, `integration-tests`, `reliability-gates` — all **success** |
+
+The **reliability-gates** job runs smoke + gated retrieval/answer against the explicit smoke manifest on an isolated empty database.
 
 ## Historical baselines
 
-### Pre-reliability-gate fix (same commit `96d4c8e`)
+### Pre-reliability-gate fix (early v0.1.0 baseline)
 
 | Metric | Value | Notes |
 |--------|--------|--------|
@@ -22,12 +46,13 @@ This file records checks executed in one local session. Metrics are copied from 
 
 Before database-level CI isolation and content-stable ranking tie-breaks, a contaminated or UUID-tied run could report **MRR = 0.7314814814814814**. That figure is **not** the current reproducible baseline.
 
-## Current validated result (isolated reliability DB)
+## Current validated result
 
 | Metric | Value |
 |--------|--------|
-| Default pytest (`python -m pytest -q`) | **413 passed**, **14 skipped** |
-| Full DB-backed pytest (`LEGAL_RAG_RUN_INTEGRATION_DB=1` on integration-only DB) | **426 passed**, **1 skipped** (Windows symlink test) |
+| Default pytest (`python -m pytest -q`) | **422 passed**, **14 skipped** |
+| Full DB-backed pytest — CI `integration-tests` (Ubuntu) | **436 passed**, **0 skipped** |
+| Full DB-backed pytest — Windows local (integration DB) | **435 passed**, **1 skipped** (symlink privilege test) |
 | Smoke pipeline (reliability-only DB) | exit **0**; retrieval `execution_status=PASSED`; answer `execution_status=PASSED` |
 | Retrieval eval (explicit smoke manifest) | **9** questions; `hit_rate=1.0`; `MRR=0.75`; `execution_status=PASSED` |
 | Answer eval (explicit smoke manifest) | **10** questions; `pass_rate=1.0` (10/10); `execution_status=PASSED`; `q3_unknown_insufficient` → `insufficient_context` |
@@ -50,8 +75,9 @@ After inserting a newer unrelated index manifest into the reliability DB, gated 
 
 | Item | Value |
 |------|--------|
-| OS | Windows 10 (win32 10.0.19045) |
-| Python | 3.13.1 |
+| OS (local capture) | Windows 10 (win32 10.0.19045) |
+| OS (CI integration / reliability) | Ubuntu (`ubuntu-latest`) |
+| Python | 3.13.1 (local); 3.11 (CI) |
 | pytest | 9.0.3 |
 | ruff | 0.15.12 |
 | mypy | 1.20.2 |
@@ -63,8 +89,9 @@ Install used: `pip install -e ".[dev,demo]"`.
 
 | Check | Status | Exit code | Notes |
 |-------|--------|-----------|--------|
-| `python -m pytest -q` | **PASSED** | 0 | Default local suite: 413 passed, 14 skipped (no DB opt-in) |
-| Integration-only DB + `LEGAL_RAG_RUN_INTEGRATION_DB=1` + `python -m pytest -q` | **PASSED** | 0 | 426 passed, 1 skipped |
+| `python -m pytest -q` | **PASSED** | 0 | Default local suite: 422 passed, 14 skipped (no DB opt-in) |
+| CI `integration-tests` + `python -m pytest -q` | **PASSED** | 0 | Ubuntu: 436 passed, 0 skipped |
+| Windows integration DB + `python -m pytest -q` | **PASSED** | 0 | 435 passed, 1 skipped |
 | `python -m ruff check .` | **PASSED** | 0 | Repository-wide Ruff |
 | `python -m mypy` | **PASSED** | 0 | Configured production package scope (`app`) |
 | `python -m mypy app` | **PASSED** | 0 | Equivalent explicit path |
@@ -86,8 +113,6 @@ GitHub Actions runs three mandatory jobs:
 3. **`reliability-gates`** — separate empty Postgres DB; migrate → smoke (`--manifest-out`) → gated retrieval/answer with `--index-manifest-id` from that file.
 
 Integration-test artifacts cannot affect evaluation metrics because they never share a database with reliability gates. Evaluation metrics are produced from the explicit smoke-generated manifest only.
-
-Remote GitHub Actions has **not** been re-run in this session.
 
 ## Smoke pipeline
 
@@ -157,7 +182,7 @@ python -m app.evaluation.cli answer data/eval/answer_golden.jsonl \
 
 `q3_unknown_insufficient`: expected `insufficient_context`, observed `insufficient_context` (`passed: true`).
 
-## Failure-path validation (mandatory, not committed)
+## Failure-path validation (local, not committed to repo)
 
 Temporary golden with mismatched expectations:
 
@@ -172,7 +197,6 @@ Proven for both retrieval and answer evaluation CLIs.
 - Metrics validate pipeline wiring on the committed sample corpus with `deterministic_hash` embeddings—not semantic retrieval quality at scale.
 - Evidence sufficiency is lexical overlap, not entailment.
 - Citation previews truncate at 240 characters (`GroundedCitation.text_preview`).
-- Demo screenshot not yet committed; see README “Demo screenshot (TODO)”.
 - Smoke `manifest_id` values are ephemeral per run and must not be treated as stable project metrics.
 - Standalone evaluation CLI without `--index-manifest-id` still auto-resolves the latest suitable manifest (legacy/local convenience); the gated CI/reliability path always pins the smoke UUID.
 
