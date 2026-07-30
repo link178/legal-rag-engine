@@ -18,10 +18,104 @@ jobs:
         run: pip install -e ".[dev,demo]"
 
       - name: Ruff
-        run: python -m ruff check app tests
+        run: python -m ruff check .
 
       - name: Mypy
+        run: python -m mypy
+
+      - name: Mypy (explicit app path)
         run: python -m mypy app
 
-      - name: Pytest (unit/smoke only)
-        run: python -m pytest -q -m "not integration"
+      - name: Pytest (default suite; DB integration skipped)
+        run: python -m pytest -q
+
+  integration-tests:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_DB: legal_rag_integration
+          POSTGRES_USER: legal_rag
+          POSTGRES_PASSWORD: legal_rag
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U legal_rag -d legal_rag_integration"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql+psycopg://legal_rag:legal_rag@localhost:5432/legal_rag_integration
+      LEGAL_RAG_RUN_INTEGRATION_DB: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install package and dev/demo extras
+        run: pip install -e ".[dev,demo]"
+
+      - name: Apply migrations
+        run: alembic upgrade head
+
+      - name: Pytest (full suite with integration DB)
+        run: python -m pytest -q
+
+  reliability-gates:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_DB: legal_rag_reliability
+          POSTGRES_USER: legal_rag
+          POSTGRES_PASSWORD: legal_rag
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U legal_rag -d legal_rag_reliability"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql+psycopg://legal_rag:legal_rag@localhost:5432/legal_rag_reliability
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install package and dev/demo extras
+        run: pip install -e ".[dev,demo]"
+
+      - name: Apply migrations
+        run: alembic upgrade head
+
+      - name: Smoke pipeline
+        run: python scripts/smoke_pipeline.py --manifest-out smoke_manifest_id.txt
+
+      - name: Read smoke manifest id
+        id: smoke_manifest
+        run: echo "id=$(tr -d ' \n' < smoke_manifest_id.txt)" >> "$GITHUB_OUTPUT"
+
+      - name: Retrieval evaluation gate
+        run: >-
+          python -m app.evaluation.cli retrieval data/eval/retrieval_golden.jsonl
+          --mode hybrid
+          --chunking-strategy fixed_size
+          --top-k 5
+          --index-manifest-id "${{ steps.smoke_manifest.outputs.id }}"
+          --json
+
+      - name: Answer evaluation gate
+        run: >-
+          python -m app.evaluation.cli answer data/eval/answer_golden.jsonl
+          --mode sparse_only
+          --chunking-strategy fixed_size
+          --provider mock
+          --index-manifest-id "${{ steps.smoke_manifest.outputs.id }}"
+          --json

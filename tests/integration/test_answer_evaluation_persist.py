@@ -44,24 +44,26 @@ def test_answer_evaluation_wiring_sample_corpus() -> None:
     assert n_eval_runs == 0
 
     root = Path(__file__).resolve().parents[2]
-    intro = root / "data/sample_corpus/basic/intro.md"
-    plain = root / "data/sample_corpus/basic/plain.txt"
+    basic = root / "data/sample_corpus/basic"
+    files = [
+        basic / "intro.md",
+        basic / "plain.txt",
+        basic / "policies.md",
+        basic / "sample.html",
+    ]
     golden = root / "data/eval/answer_golden.jsonl"
 
     svc = default_ingestion_service()
-    ing1 = ingest_file_persisted(intro, svc)
-    ing2 = ingest_file_persisted(plain, svc)
-    assert ing1.error is None and ing1.document and ing1.document.id
-    assert ing2.error is None and ing2.document and ing2.document.id
-    doc1 = ing1.document.id
-    doc2 = ing2.document.id
-    assert doc1 and doc2
+    doc_ids: list = []
+    for path in files:
+        ing = ingest_file_persisted(path, svc)
+        assert ing.error is None and ing.document and ing.document.id
+        doc_ids.append(ing.document.id)
 
     cfg_ck = ChunkingConfig(strategy="fixed_size", chunk_size=400, chunk_overlap=40)
-    c1 = chunk_document_persisted(doc1, cfg_ck)
-    c2 = chunk_document_persisted(doc2, cfg_ck)
-    assert c1.error is None
-    assert c2.error is None
+    for doc_id in doc_ids:
+        c = chunk_document_persisted(doc_id, cfg_ck)
+        assert c.error is None
 
     ix_cfg = IndexingConfig(chunking_strategy="fixed_size", embedding_dimensions=16, batch_size=8)
     r1 = index_chunks_persisted(ix_cfg)
@@ -82,11 +84,16 @@ def test_answer_evaluation_wiring_sample_corpus() -> None:
         runner = AnswerEvaluationRunner.from_session(session, cfg)
         summary = runner.run_file(golden, top_k=5)
 
-    assert summary.total_questions == 3
+    assert summary.total_questions == 10
     assert summary.total_questions == summary.answered_questions + summary.errored_questions
     assert summary.schema_version == "evaluation.answer.v1"
     assert summary.manifest.get("id")
     assert summary.errored_questions == 0
+    assert summary.execution_status == "PASSED"
+    assert summary.pass_rate == 1.0
+    q3 = next(i for i in summary.items if i.question_id == "q3_unknown_insufficient")
+    assert q3.answer_mode == "insufficient_context"
+    assert q3.passed is True
 
     with session_scope() as session:
         n_after = session.scalar(

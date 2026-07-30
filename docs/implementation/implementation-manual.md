@@ -298,7 +298,7 @@ Implementado como capa engine-only (sin endpoints FastAPI todavía). Flujo:
 3. `build_grounded_prompt(question, blocks, insufficient_sentence=...)` genera una sola cadena lista para enviar al proveedor.
 4. ``GenerationProvider.generate(prompt: str) -> str`` produce la respuesta en bruto (`MockGenerationProvider` en esta fase).
 5. `verify_citations(answer_text, blocks)` (Phase 7) compara todas las apariciones `[N]` con los ids de bloque; clasifica `CitationVerificationResult`.
-6. Modo de respuesta: `insufficient_context` si no hay bloques tras `ContextBuilder` o la respuesta igual a `INSUFFICIENT_CONTEXT_SENTENCE`; `grounded` si hay al menos una cita válida y ninguna inválida; `partial` en el resto de casos con contexto (sin citas válidas, sólo inválidas, o mezcla válida+inválida). `used_citation_ids` lleva sólo ids válidos citados.
+6. Modo de respuesta: `insufficient_context` si no hay bloques tras `ContextBuilder`, si el contexto **no pasa** la comprobación léxica de evidencia suficiente (`app/generation/evidence.py`), o si la respuesta es exactamente `INSUFFICIENT_CONTEXT_SENTENCE`; `grounded` si el contexto es suficiente y hay al menos una cita válida y ninguna inválida; `partial` en el resto de casos con contexto suficiente (sin citas válidas, sólo inválidas, o mezcla válida+inválida). `used_citation_ids` lleva sólo ids válidos citados.
 
 Formato de contexto determinista (cabeceras de una línea + cuerpo de texto):
 
@@ -315,7 +315,7 @@ Los proveedores v1 efectivos aquí solo incluyen **`MockGenerationProvider`**; p
 
 La verificación **implementada** comprueba que cada bracket `[N]` en la respuesta apunte a un bloque de contexto presente en el prompt (sin DB, sin LLM). `GroundedAnswer.citation_verification` y CLI JSON exponen válidas, inválidas, no usadas, duplicados y `citation_validity_rate`. No hay solapamiento léxico ni entailment semántico en esta fase.
 
-`insufficient_context` se sigue activando sólo cuando no hay bloques utilizables después de `ContextBuilder` o cuando la salida es exactamente la frase sentinel; **no** se baja por score de retrieval ni contradicción entre chunks (esto queda fuera del alcance público actual).
+`insufficient_context` también se activa cuando hay bloques recuperados pero **no apoyan materialmente** la pregunta (solapamiento de términos de contenido con stopwords fijos; ver `generation-notes.md`). No sustituye entailment semántico ni comprobación de contradicción entre chunks.
 
 ## 15. API (Phases 8–9 shipped baseline)
 

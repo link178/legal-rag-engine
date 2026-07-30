@@ -52,14 +52,30 @@ def test_overlap_positive_score(manifest) -> None:
     assert out[0].sparse_score > 0
 
 
-def test_no_overlap_zero(manifest) -> None:
+def test_no_overlap_returns_empty(manifest) -> None:
     rows = [_row("zzz", {"zzz": 1})]
     with patch("app.retrieval.sparse.IndexManifestRepository") as MockRepo:
         MockRepo.return_value.list_sparse_chunk_rows.return_value = rows
         ret = SparseRetriever(MagicMock())
         out = ret.retrieve("nomatchhere", RetrievalConfig(), manifest)
-    assert len(out) == 1
-    assert out[0].sparse_score == 0.0
+    assert out == []
+
+
+def test_equal_sparse_scores_break_ties_by_source_path(manifest) -> None:
+    rows = [
+        _row("shared terms", {"cat": 1}),
+        _row("shared terms", {"cat": 1}),
+    ]
+    rows[0][1].source_path = "z.md"
+    rows[1][1].source_path = "a.md"
+    with patch("app.retrieval.sparse.IndexManifestRepository") as MockRepo:
+        MockRepo.return_value.list_sparse_chunk_rows.return_value = rows
+        ret = SparseRetriever(MagicMock())
+        out = ret.retrieve("cat", RetrievalConfig(mode="sparse_only", sparse_top_k=10), manifest)
+    assert len(out) == 2
+    assert out[0].sparse_score == out[1].sparse_score
+    assert out[0].source_path == "a.md"
+    assert out[1].source_path == "z.md"
 
 
 def test_case_insensitive(manifest) -> None:

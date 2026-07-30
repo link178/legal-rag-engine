@@ -617,6 +617,11 @@ class ChunkEmbeddingRepository:
             .where(ChunkEmbeddingRecord.index_manifest_id == index_manifest_id)
         )
         stmt = _apply_document_metadata_filter(stmt, metadata_filter)
-        stmt = stmt.order_by(dist_expr.asc(), ChunkRecord.id.asc()).limit(limit)
+        stmt = stmt.order_by(
+            dist_expr.asc(),
+            DocumentRecord.source_path.asc(),
+            ChunkRecord.chunk_index.asc(),
+            ChunkRecord.id.asc(),
+        ).limit(limit)
         rows = self._session.execute(stmt).all()
         return [(r[0], r[1], float(r[2])) for r in rows]

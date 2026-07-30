@@ -21,6 +21,7 @@ from app.evaluation.models import (
     RetrievalEvaluationSummary,
     RetrievalGoldenQuestion,
 )
+from app.evaluation.status import derive_retrieval_execution_status
 from app.retrieval.dense import DenseRetriever
 from app.retrieval.errors import ManifestNotFoundError, RetrievalError
 from app.retrieval.manifest import resolve_manifest_record
@@ -234,6 +235,7 @@ class RetrievalEvaluationRunner:
                 )
 
         total, answered, errored, hit_rate, mrr = summarize_retrieval_evaluation(tuple(items))
+        status = derive_retrieval_execution_status(tuple(items), total_questions=total)
         return RetrievalEvaluationSummary(
             schema_version="evaluation.retrieval.v1",
             created_at=created_at,
@@ -245,4 +247,5 @@ class RetrievalEvaluationRunner:
             hit_rate=hit_rate,
             mrr=mrr,
             items=tuple(items),
+            execution_status=status,
         )

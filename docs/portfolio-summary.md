@@ -2,35 +2,42 @@
 
 ## One-liner
 
-Local-first hybrid RAG engine with PostgreSQL/pgvector, metadata-aware retrieval, mechanical citation verification, and reproducible retrieval and answer evaluation.
+Local-first hybrid RAG engine (Python, FastAPI, PostgreSQL/pgvector, Streamlit) with grounded mock answers, mechanical citation verification, and reproducible retrieval/answer evaluation.
 
-## What it is
+## Problem
 
-An **engine-first** Python codebase—not a chatbot wrapper—covering traceable ingestion (Markdown, text, HTML, PDF text extraction), chunking strategies, dense and sparse retrieval with **RRF** fusion, indexing manifests, grounded **mock** generation with citations, a thin FastAPI `/v1` surface, and a Streamlit demo that calls the API over HTTP only.
+Many public RAG demos hide the hard parts: auditable ingestion, comparable chunking, reproducible indexes, explicit dense/sparse/hybrid retrieval, citation checks, deterministic evaluation, and controlled insufficient-context behavior. Recruiters and engineers need a readable reference that shows those practices without requiring paid APIs.
 
-## What it demonstrates
+## Architecture
 
-- End-to-end RAG plumbing with **operator-controlled** CLIs and optional HTTP.
-- **Deterministic baselines**: pseudo-embeddings and mock generation so tests and demos run without paid APIs.
-- **Evaluation discipline**: golden JSONL for retrieval (Hit@k, MRR) and for grounded answers (mock end-to-end checks).
-- **Honest boundaries**: not legal advice, not a compliance SaaS, not an AI Act product.
+Engine-first pipeline: loaders (Markdown, TXT, HTML, PDF text extraction, `legalize-*` adapter) → normalization and checksums → PostgreSQL documents/chunks → chunking (`fixed_size` / `structure_aware`) → indexing manifests with pgvector dense embeddings and sparse term maps → dense / sparse / hybrid RRF retrieval with metadata filters → context builder → grounded mock generation → mechanical citation verification → FastAPI `/v1` and HTTP-only Streamlit demo. Evaluation CLIs reuse the same Postgres read path.
 
-## Technical highlights
+## Engineering decisions
 
-- PostgreSQL + **pgvector** as the default vector store.
-- Retrieval modes **`dense_only`**, **`sparse_only`**, **`hybrid`** (explicit naming aligned with the API).
-- Corpus adapter for **`legalize-*`** style trees with enriched metadata and import reports.
-- Seven-field **exact-match metadata filters** on document JSON (retrieval, generation, evaluation, and Streamlit).
+- **Local-first, zero-cost baseline** (ADR-0001): Postgres/pgvector default; no API keys for smoke tests or unit tests.
+- **Manifests** as the reproducibility unit for indexed state (provider, dimensions, sparse inclusion, chunking strategy).
+- **Explicit retrieval modes** (`dense_only`, `sparse_only`, `hybrid`) rather than opaque “search.”
+- **Mock generation + deterministic_hash embeddings** so CI and demos stay offline-reproducible; optional `local-embeddings` extra for sentence-transformers.
+- **Thin delivery layer**: FastAPI and Streamlit wrap the engine; they do not own the domain logic.
+- **Content-stable ranking tie-breaks** (`source_path`, `chunk_index`) so equal scores do not depend on random chunk UUIDs across database recreations.
 
-## What I learned / demonstrated
+## Reliability / evaluation approach
 
-- Separating **engine** (domain, runners, repositories) from **delivery** (FastAPI, Streamlit).
-- Treating **index manifests** as the unit of reproducibility for “what was indexed.”
-- Keeping **citation verification** mechanical and testable rather than claiming entailment.
+- Golden JSONL under `data/eval/` for retrieval (Hit@k, MRR) and answers (mode, terms, citations, insufficient-context).
+- Operator smoke script: ingest → chunk → index → retrieve → generate → eval, with `--manifest-out` for CI handoff.
+- CI: three mandatory jobs — repository-wide Ruff + Mypy on `app` + default pytest; **integration pytest on an isolated DB**; **reliability smoke + gated eval on a separate empty DB** using the explicit smoke-created `--index-manifest-id`. Integration-test artifacts cannot affect evaluation metrics.
 
-## Limitations (fair)
+## Demonstrable result
 
-- Default generation is **mock**; real LLM integration is explicitly out of scope for v0.1.0.
+**Current (post-isolation working tree, base commit `96d4c8e`):** default pytest **413 passed** / **14 skipped**; full DB-backed pytest **426 passed** / **1 skipped** (Windows); `python -m ruff check .` and `python -m mypy` (production package `app`) clean; smoke pipeline exit **0** with retrieval and answer `execution_status=PASSED`; retrieval golden (**9** questions, `hybrid`, top-k **5**) **hit_rate = 1.0**, **MRR = 0.75** (raw snapshot **0.75**; identical across clean DB recreations); answer golden (**10** questions, `sparse_only`, `mock`) **pass_rate = 1.0** including `q3_unknown_insufficient` → `insufficient_context`. Full log: [evaluation-snapshot.md](evaluation-snapshot.md).
+
+**Historical:** pre-fix answer pass_rate **0.667** (2/3) while smoke still exited 0; a pre-isolation MRR of **0.7314814814814814** is superseded by the reproducible **0.75** baseline after DB isolation and stable ranking ties.
+
+## Limitations
+
+- Default generation is **mock**; real LLM providers are out of scope for v0.1.0.
 - PDFs: text extraction only; **no OCR**.
-- Sparse retrieval is a **manifest-bound** lexical baseline in v1, not a full FTS product.
-- The project targets **portfolio-grade engineering**, not production SaaS operations (no auth, no multi-tenant layer in-repo).
+- Citation verification is **mechanical**, not entailment.
+- Sparse retrieval is **manifest-bound** lexical in v1, not Postgres FTS.
+- Dense baseline uses **`deterministic_hash`**, not semantic embeddings unless opted in.
+- Not a compliance SaaS: no auth, multi-tenant layer, or AI Act product logic in-repo.

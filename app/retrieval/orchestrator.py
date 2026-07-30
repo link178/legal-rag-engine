@@ -28,7 +28,12 @@ def _finalize_branch(hits: list[RetrievedChunk], *, top_k: int) -> list[Retrieve
     def sort_key(h: RetrievedChunk) -> tuple:
         score = h.dense_score if h.dense_score is not None else h.sparse_score
         s = score if score is not None else 0.0
-        return (-s, h.chunk_id)
+        return (
+            -s,
+            h.source_path or "",
+            h.chunk_index if h.chunk_index is not None else -1,
+            str(h.chunk_id) if h.chunk_id is not None else "",
+        )
 
     ordered = sorted(hits, key=sort_key)[:top_k]
     out: list[RetrievedChunk] = []

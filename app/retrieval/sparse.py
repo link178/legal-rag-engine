@@ -85,9 +85,17 @@ class SparseRetriever:
             sc, nmatch = _score_chunk(query_tokens, idf_by_term, terms)
             scored.append((chunk, doc, sc, nmatch))
 
-        scored.sort(key=lambda x: (-x[2], x[0].id))
+        scored.sort(
+            key=lambda x: (
+                -x[2],
+                x[1].source_path or "",
+                x[0].chunk_index if x[0].chunk_index is not None else -1,
+                str(x[0].id) if x[0].id is not None else "",
+            )
+        )
+        positive = [(c, d, sc, n) for c, d, sc, n in scored if sc > 0]
         out: list[RetrievedChunk] = []
-        for i, (chunk, doc, sc, nmatch) in enumerate(scored[: config.sparse_top_k], start=1):
+        for i, (chunk, doc, sc, nmatch) in enumerate(positive[: config.sparse_top_k], start=1):
             out.append(
                 RetrievedChunk(
                     chunk_id=chunk.id,
