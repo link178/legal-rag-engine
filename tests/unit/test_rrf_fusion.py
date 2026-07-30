@@ -62,7 +62,46 @@ def test_top_k_truncates() -> None:
     assert len(out) == 2
 
 
-def test_inputs_not_mutated() -> None:
+def test_equal_rrf_scores_break_ties_by_source_path() -> None:
+    """Equal RRF contributions must not depend on random UUID ordering alone."""
+    low = uuid4()
+    high = uuid4()
+    # Force UUID order opposite to source_path order.
+    a = RetrievedChunk(
+        chunk_id=high if str(high) > str(low) else low,
+        document_id=uuid4(),
+        text="a",
+        source_path="z_last.md",
+        title=None,
+        heading=None,
+        chunk_index=0,
+        chunking_strategy="fixed_size",
+        dense_score=1.0,
+        sparse_score=None,
+        rank_position=1,
+        retrieval_sources=("dense",),
+    )
+    b = RetrievedChunk(
+        chunk_id=low if str(high) > str(low) else high,
+        document_id=uuid4(),
+        text="b",
+        source_path="a_first.md",
+        title=None,
+        heading=None,
+        chunk_index=0,
+        chunking_strategy="fixed_size",
+        dense_score=1.0,
+        sparse_score=None,
+        rank_position=1,
+        retrieval_sources=("dense",),
+    )
+    # Separate lists with identical rank-1 so RRF scores match.
+    out = reciprocal_rank_fusion([[a], [b]], rrf_k=60, top_k=10)
+    assert len(out) == 2
+    assert out[0].rrf_score == out[1].rrf_score
+    assert out[0].source_path == "a_first.md"
+    assert out[1].source_path == "z_last.md"
+
     a = _ch(0, dense=0.9, src=("dense",))
     b = _ch(1, dense=0.8, src=("dense",))
     ranked = [a, b]

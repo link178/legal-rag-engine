@@ -17,6 +17,7 @@ from app.evaluation.models import (
 )
 from app.evaluation.runners.answer import AnswerEvaluationRunner
 from app.evaluation.runners.retrieval import RetrievalEvaluationRunner
+from app.evaluation.status import exit_code_for_status
 from app.generation.context import ContextBuilder
 from app.generation.providers.mock import MockGenerationProvider
 from app.retrieval.errors import ManifestNotFoundError, RetrievalError
@@ -56,6 +57,7 @@ def evaluation_summary_to_dict(summary: RetrievalEvaluationSummary) -> dict:
             "hit_rate": summary.hit_rate,
             "mrr": summary.mrr,
             "hit_at_k_notes": summary.hit_at_k_notes,
+            "execution_status": summary.execution_status,
         },
         "items": [evaluation_item_to_dict(i) for i in summary.items],
     }
@@ -101,6 +103,7 @@ def evaluation_answer_summary_to_dict(summary: AnswerEvaluationSummary) -> dict:
             "insufficient_context_accuracy": summary.insufficient_context_accuracy,
             "retrieved_expected_source_rate": summary.retrieved_expected_source_rate,
             "retrieved_expected_source_notes": summary.retrieved_expected_source_notes,
+            "execution_status": summary.execution_status,
         },
         "items": [evaluation_answer_item_to_dict(i) for i in summary.items],
     }
@@ -113,6 +116,7 @@ def write_markdown_report(summary: RetrievalEvaluationSummary, path: Path) -> No
         f"- mode: {summary.config.get('mode')}",
         f"- top_k: {summary.config.get('top_k')}",
         f"- manifest_id: {summary.manifest.get('id')}",
+        f"- execution_status: {summary.execution_status}",
         f"- hit_rate: {summary.hit_rate:.4f}  ({summary.answered_questions} answered)",
         f"- MRR: {summary.mrr:.4f}",
         f"- errors: {summary.errored_questions}",
@@ -140,6 +144,7 @@ def write_answer_markdown_report(summary: AnswerEvaluationSummary, path: Path) -
         f"- top_k: {summary.config.get('top_k')}",
         f"- provider: {summary.config.get('provider')}",
         f"- manifest_id: {summary.manifest.get('id')}",
+        f"- execution_status: {summary.execution_status}",
         f"- pass_rate: {summary.pass_rate:.4f}  ({summary.answered_questions} answered)",
         f"- mode_accuracy: {summary.mode_accuracy:.4f}",
         f"- expected_terms_accuracy: {summary.expected_terms_accuracy:.4f}",
@@ -304,6 +309,15 @@ def _build_retrieval_parser() -> argparse.ArgumentParser:
         default=None,
         help="Write Markdown summary to this path",
     )
+    parser.add_argument(
+        "--no-gate",
+        action="store_true",
+        dest="no_gate",
+        help=(
+            "Informational mode: exit 0 when evaluation executed even if cases "
+            "failed; infrastructure failures still exit non-zero"
+        ),
+    )
     add_metadata_filter_flags(parser)
     return parser
 
@@ -351,12 +365,14 @@ def _run_retrieval(argv: list[str]) -> int:
 
     if not args.as_json and not args.output:
         print(
-            f"eval: questions={summary.total_questions} hit_rate={summary.hit_rate:.4f} "
+            f"eval: questions={summary.total_questions} "
+            f"execution_status={summary.execution_status} "
+            f"hit_rate={summary.hit_rate:.4f} "
             f"mrr={summary.mrr:.4f} errors={summary.errored_questions} "
             f"manifest={summary.manifest.get('id')}"
         )
 
-    return 0
+    return exit_code_for_status(summary.execution_status, gate=not args.no_gate)
 
 
 def _build_answer_parser() -> argparse.ArgumentParser:
@@ -449,6 +465,15 @@ def _build_answer_parser() -> argparse.ArgumentParser:
         default=None,
         help="Write Markdown summary to this path",
     )
+    parser.add_argument(
+        "--no-gate",
+        action="store_true",
+        dest="no_gate",
+        help=(
+            "Informational mode: exit 0 when evaluation executed even if cases "
+            "failed; infrastructure failures still exit non-zero"
+        ),
+    )
     add_metadata_filter_flags(parser)
     return parser
 
@@ -527,11 +552,12 @@ def _run_answer(argv: list[str]) -> int:
     if not args.as_json and not args.output:
         print(
             f"answer_eval: questions={summary.total_questions} "
+            f"execution_status={summary.execution_status} "
             f"pass_rate={summary.pass_rate:.4f} errors={summary.errored_questions} "
             f"manifest={summary.manifest.get('id')}"
         )
 
-    return 0
+    return exit_code_for_status(summary.execution_status, gate=not args.no_gate)
 
 
 def main(argv: list[str] | None = None) -> int:

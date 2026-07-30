@@ -46,7 +46,15 @@ def reciprocal_rank_fusion(
             else:
                 merged[cid] = _merge_hit(merged[cid], ch)
 
-    ordered = sorted(merged.keys(), key=lambda u: (-rrf_accum[u], u))[:top_k]
+    ordered = sorted(
+        merged.keys(),
+        key=lambda u: (
+            -rrf_accum[u],
+            merged[u].source_path or "",
+            merged[u].chunk_index if merged[u].chunk_index is not None else -1,
+            str(u),
+        ),
+    )[:top_k]
 
     out: list[RetrievedChunk] = []
     for pos, cid in enumerate(ordered, start=1):

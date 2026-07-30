@@ -5,12 +5,11 @@ from __future__ import annotations
 from logging.config import fileConfig
 
 from alembic import context
-from sqlalchemy import engine_from_config, pool
-
-from app.storage.postgres.base import Base
 
 # noqa: F401 - register mapped classes on Base.metadata
 from app.storage.postgres import models as _postgres_models  # noqa: F401
+from app.storage.postgres.base import Base
+from sqlalchemy import engine_from_config, pool
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.

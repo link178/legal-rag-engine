@@ -79,8 +79,9 @@ Default `deterministic_hash` embeddings are **not** semantic retrieval. Dense sc
 ## Tests
 
 - Default `pytest`: unit tests only (no DB).
-- Integration (retrieval eval): `LEGAL_RAG_RUN_INTEGRATION_DB=1` and `pytest -m integration` (`tests/integration/test_retrieval_evaluation_persist.py`, `tests/integration/test_retrieval_filter_persist.py`).
+- Integration (retrieval eval): `LEGAL_RAG_RUN_INTEGRATION_DB=1` and `pytest -m integration` (`tests/integration/test_retrieval_evaluation_persist.py`, `tests/integration/test_retrieval_filter_persist.py`, `tests/integration/test_evaluation_manifest_isolation.py`).
 - Integration (answer eval): same flag and `tests/integration/test_answer_evaluation_persist.py` (uses `sparse_only` + sample corpus).
+- CI reliability gates use a **separate** Postgres database from integration pytest, write the smoke manifest via `--manifest-out`, and pin gated eval with `--index-manifest-id` (no auto-resolution on the gated path).
 
 ---
 
@@ -120,7 +121,19 @@ One JSON object per non-empty line. Required: `id`, `question`. Optional:
 
 Rows with unknown `expected_mode` or invalid `expected_terms_in` / `recommended_mode` are rejected at load time.
 
-**Insufficient-context goldens** (e.g. off-corpus questions) are **retrieval-dependent**: with `hybrid` or `dense_only`, unrelated chunks may still appear and the mock may return `grounded`. The ship example `q3_unknown_insufficient` sets `recommended_mode: sparse_only`; use that mode (or a stricter `--min-score`) if you need a stable insufficient-context outcome on the tiny sample corpus.
+**Insufficient-context goldens** (e.g. off-corpus questions) rely on the deterministic evidence-sufficiency gate in `GroundedAnswerer` / `MockGenerationProvider`: retrieved chunks that do not materially support the question (stopword-aware content-term overlap) yield `insufficient_context` even when citation ids would otherwise be valid. The ship example `q3_unknown_insufficient` must remain `insufficient_context` under `sparse_only` (and typically under hybrid as well when evidence is insufficient).
+
+### Execution status and exit codes
+
+Completed evaluation reports include `summary.execution_status`:
+
+| Status | Meaning |
+| --- | --- |
+| `PASSED` | Evaluation executed; every required case passed |
+| `EXECUTED_WITH_FAILED_CASE` | Evaluation executed; one or more cases failed |
+| `FAILED` | Evaluation could not execute reliably (empty/malformed results, load/config/runtime errors at the CLI boundary) |
+
+By default the CLI **gates** on status: `PASSED` → exit 0; otherwise exit non-zero. Use `--no-gate` for informational runs that still exit 0 when cases failed but the harness executed (infrastructure failures remain non-zero). Smoke (`scripts/smoke_pipeline.py`) requires `execution_status == PASSED` for both retrieval and answer evaluation.
 
 ### CLI (answer)
 
@@ -128,7 +141,7 @@ Same DB prerequisites as `python -m app.generation.cli`. Subcommand:
 
 ```bash
 python -m app.evaluation.cli answer data/eval/answer_golden.jsonl \
-  --mode hybrid \
+  --mode sparse_only \
   --chunking-strategy fixed_size \
   --top-k 5 \
   --provider mock \

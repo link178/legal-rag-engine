@@ -52,7 +52,7 @@ Shipped Phase 6:
 
 - **`GenerationProvider` protocol** (`app/generation/providers/base.py`): `name: str` and `generate(self, prompt: str) -> str`.
 - **`INSUFFICIENT_CONTEXT_SENTENCE`**: exact fallback string the prompt instructs the model to use when context is inadequate.
-- **`MockGenerationProvider`** (`mock`): parses `[N]` **block headers** in the prompt and returns a fixed English sentence citing up to the first three ids; if no headers are found, returns the insufficient-context sentence exactly.
+- **`MockGenerationProvider`** (`mock`): parses `[N]` **block headers** and the `Question:` line; returns a fixed English sentence citing up to the first three ids **only when** evidence is sufficient for the question; otherwise returns the insufficient-context sentence. If no headers are found, returns the insufficient-context sentence exactly.
 
 CLI flag `--provider` only accepts **`mock`** in this phase (default follows `GENERATION_PROVIDER` env; invalid values exit before DB access).
 
@@ -60,9 +60,11 @@ Future (out of Phase 6): local / cloud LLMs behind optional adapters only.
 
 ## Answer modes
 
-- **`grounded`**: at least one bracketed `[k]` refers to a context block **and** **no** bracketed id is out of range (all used unique ids are valid).
-- **`partial`**: context existed but the answer has no valid brackets, only invalid/out-of-range brackets, or **mixed** valid + invalid brackets.
-- **`insufficient_context`**: no retrieval-backed context survived `ContextBuilder`, or raw answer trimmed equals `INSUFFICIENT_CONTEXT_SENTENCE`.
+- **`grounded`**: context is evidence-sufficient for the question **and** at least one bracketed `[k]` refers to a context block **and** **no** bracketed id is out of range (all used unique ids are valid).
+- **`partial`**: context was evidence-sufficient but the answer has no valid brackets, only invalid/out-of-range brackets, or **mixed** valid + invalid brackets.
+- **`insufficient_context`**: no retrieval-backed context survived `ContextBuilder`, **or** retrieved context fails the deterministic evidence-sufficiency check (stopword-aware content-term overlap; see `app/generation/evidence.py`), **or** raw answer trimmed equals `INSUFFICIENT_CONTEXT_SENTENCE`.
+
+`grounded` is **not** assigned merely because retrieval returned chunks or because citation ids are syntactically valid. Valid citations over irrelevant context still yield `insufficient_context` when evidence is insufficient.
 
 `GroundedCitation` rows list **every** retained context block when not insufficient; `used_citation_ids` lists **valid** cited ids only (subset of context block ids). Full mechanical detail is on `GroundedAnswer.citation_verification`.
 

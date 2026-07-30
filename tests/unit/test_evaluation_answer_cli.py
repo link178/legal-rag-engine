@@ -68,6 +68,7 @@ def _answer_summary() -> AnswerEvaluationSummary:
         insufficient_context_accuracy=1.0,
         retrieved_expected_source_rate=1.0,
         items=(item,),
+        execution_status="PASSED",
     )
 
 
@@ -99,6 +100,73 @@ def test_answer_cli_json_stdout(fake_settings, capsys: pytest.CaptureFixture[str
     out = json.loads(capsys.readouterr().out)
     assert out["schema_version"] == "evaluation.answer.v1"
     assert out["summary"]["pass_rate"] == 1.0
+    assert out["summary"]["execution_status"] == "PASSED"
+
+
+def test_answer_cli_failed_case_exits_nonzero(
+    fake_settings, capsys: pytest.CaptureFixture[str]
+) -> None:
+    item = AnswerEvaluationItem(
+        question_id="q_fail",
+        question="?",
+        mode="sparse_only",
+        answer_mode="grounded",
+        expected_mode="insufficient_context",
+        mode_matches=False,
+        contains_expected_terms=True,
+        missing_expected_terms=(),
+        citation_validity_rate=1.0,
+        has_valid_citations=True,
+        has_invalid_citations=False,
+        insufficient_context_matches=False,
+        retrieved_expected_source=None,
+        cited_source_paths=(),
+        used_citation_ids=(1,),
+        invalid_citation_ids=(),
+        passed=False,
+        error=None,
+    )
+    summary = AnswerEvaluationSummary(
+        schema_version="evaluation.answer.v1",
+        created_at=datetime(2026, 5, 5, tzinfo=UTC),
+        config={"mode": "sparse_only", "top_k": 5, "provider": "mock"},
+        manifest={"id": str(uuid4())},
+        total_questions=1,
+        answered_questions=1,
+        errored_questions=0,
+        pass_rate=0.0,
+        mode_accuracy=0.0,
+        expected_terms_accuracy=1.0,
+        citation_validity_rate_avg=1.0,
+        insufficient_context_accuracy=0.0,
+        retrieved_expected_source_rate=1.0,
+        items=(item,),
+        execution_status="EXECUTED_WITH_FAILED_CASE",
+    )
+    gpath = tmp_golden(
+        '{"id":"q_fail","question":"?","expected_mode":"insufficient_context"}'
+    )
+    inst = MagicMock()
+    inst.run_file.return_value = summary
+    with patch("app.evaluation.cli.session_scope"):
+        with patch("app.evaluation.cli.get_settings", return_value=fake_settings):
+            with patch(
+                "app.evaluation.cli.AnswerEvaluationRunner.from_session",
+                return_value=inst,
+            ):
+                rc = main(["answer", str(gpath), "--json"])
+    assert rc == 1
+    out = json.loads(capsys.readouterr().out)
+    assert out["summary"]["execution_status"] == "EXECUTED_WITH_FAILED_CASE"
+
+    with patch("app.evaluation.cli.session_scope"):
+        with patch("app.evaluation.cli.get_settings", return_value=fake_settings):
+            with patch(
+                "app.evaluation.cli.AnswerEvaluationRunner.from_session",
+                return_value=inst,
+            ):
+                rc_info = main(["answer", str(gpath), "--json", "--no-gate"])
+    assert rc_info == 0
 
 
 def test_answer_cli_rejects_non_mock_provider() -> None:
@@ -157,6 +225,7 @@ def test_retrieval_legacy_dispatch(fake_settings, capsys: pytest.CaptureFixture[
         hit_rate=1.0,
         mrr=1.0,
         items=(item,),
+        execution_status="PASSED",
     )
     gpath = tmp_golden('{"id":"x","question":"?","expected_terms":["t"]}')
     with patch("app.evaluation.cli.session_scope"):
@@ -199,6 +268,7 @@ def test_retrieval_explicit_subcommand(fake_settings, capsys: pytest.CaptureFixt
         hit_rate=1.0,
         mrr=1.0,
         items=(item,),
+        execution_status="PASSED",
     )
     gpath = tmp_golden('{"id":"x","question":"?","expected_terms":["t"]}')
     with patch("app.evaluation.cli.session_scope"):
@@ -221,6 +291,66 @@ def test_answer_cli_manifest_not_found(fake_settings) -> None:
             with patch("app.evaluation.cli.get_settings", return_value=fake_settings):
                 rc = main(["answer", str(g)])
     assert rc == 1
+
+
+def test_answer_cli_explicit_manifest_id_passed_to_runner(
+    fake_settings, tmp_path: Path
+) -> None:
+    mid = uuid4()
+    summary = _answer_summary()
+    gpath = tmp_path / "g.jsonl"
+    gpath.write_text(
+        '{"id":"x","question":"?","expected_mode":"grounded","expected_terms":["t"]}\n',
+        encoding="utf-8",
+    )
+    inst = MagicMock()
+    inst.run_file.return_value = summary
+    with patch("app.evaluation.cli.session_scope"):
+        with patch("app.evaluation.cli.get_settings", return_value=fake_settings):
+            with patch(
+                "app.evaluation.cli.AnswerEvaluationRunner.from_session",
+                return_value=inst,
+            ) as MockFrom:
+                rc = main(
+                    [
+                        "answer",
+                        str(gpath),
+                        "--index-manifest-id",
+                        str(mid),
+                        "--json",
+                    ]
+                )
+    assert rc == 0
+    cfg = MockFrom.call_args[0][1]
+    assert cfg.index_manifest_id == mid
+
+
+def test_answer_cli_unknown_manifest_exits_nonzero(
+    fake_settings, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    mid = uuid4()
+    gpath = tmp_path / "g.jsonl"
+    gpath.write_text(
+        '{"id":"x","question":"?","expected_mode":"grounded","expected_terms":["t"]}\n',
+        encoding="utf-8",
+    )
+    with patch("app.evaluation.cli.session_scope"):
+        with patch("app.evaluation.cli.get_settings", return_value=fake_settings):
+            with patch(
+                "app.evaluation.cli.AnswerEvaluationRunner.from_session",
+                side_effect=ManifestNotFoundError(f"No index manifest with id={mid}"),
+            ):
+                rc = main(
+                    [
+                        "answer",
+                        str(gpath),
+                        "--index-manifest-id",
+                        str(mid),
+                    ]
+                )
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert str(mid) in err
 
 
 def test_answer_cli_writes_output(fake_settings, tmp_path: Path) -> None:

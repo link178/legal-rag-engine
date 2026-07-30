@@ -79,6 +79,7 @@ class RetrievalEvaluationSummary:
     hit_rate: float
     mrr: float
     items: tuple[RetrievalEvaluationItem, ...]
+    execution_status: str = "FAILED"
     hit_at_k_notes: str = field(
         default="hit_rate counts questions with hit_rank <= top_k among answered_questions"
     )
@@ -176,6 +177,7 @@ class AnswerEvaluationSummary:
     insufficient_context_accuracy: float
     retrieved_expected_source_rate: float
     items: tuple[AnswerEvaluationItem, ...]
+    execution_status: str = "FAILED"
     retrieved_expected_source_notes: str = field(
         default=(
             "retrieved_expected_source_rate is over applicable items only "

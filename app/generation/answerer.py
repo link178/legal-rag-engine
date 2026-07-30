@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.generation.citations import verify_citations
 from app.generation.context import ContextBuilder
+from app.generation.evidence import evidence_is_sufficient
 from app.generation.models import GroundedAnswer, citation_from_block, empty_verification
 from app.generation.prompts import build_grounded_prompt
 from app.generation.providers import (
@@ -99,7 +100,7 @@ class GroundedAnswerer:
         blocks = self._builder.build(retrieval.results)
         base_meta["total_context_blocks"] = len(blocks)
 
-        if not blocks:
+        if not blocks or not evidence_is_sufficient(question, blocks):
             ans = sentinel
             vacuity = empty_verification()
             return GroundedAnswer(
@@ -115,6 +116,7 @@ class GroundedAnswerer:
                 | {
                     "citation_validity_rate": vacuity.citation_validity_rate,
                     "has_invalid_citations": vacuity.has_invalid_citations,
+                    "evidence_sufficient": False,
                 },
                 citation_verification=vacuity,
             )
@@ -159,6 +161,7 @@ class GroundedAnswerer:
         merged_meta = base_meta | {
             "citation_validity_rate": verification.citation_validity_rate,
             "has_invalid_citations": verification.has_invalid_citations,
+            "evidence_sufficient": True,
         }
 
         return GroundedAnswer(

@@ -53,6 +53,7 @@ def _fake_summary() -> RetrievalEvaluationSummary:
         hit_rate=1.0,
         mrr=1.0,
         items=(item,),
+        execution_status="PASSED",
     )
 
 
@@ -119,6 +120,59 @@ def test_cli_invalid_manifest_uuid(fake_settings) -> None:
     assert rc == 1
 
 
+def test_retrieval_cli_explicit_manifest_id_passed_to_runner(
+    fake_settings, tmp_path: Path
+) -> None:
+    mid = uuid4()
+    summary = _fake_summary()
+    gpath = tmp_path / "g.jsonl"
+    gpath.write_text('{"id":"x","question":"?","expected_terms":["t"]}\n', encoding="utf-8")
+    with patch("app.evaluation.cli.session_scope"):
+        with patch("app.evaluation.cli.get_settings", return_value=fake_settings):
+            with patch("app.evaluation.cli.RetrievalEvaluationRunner") as MockRunner:
+                inst = MagicMock()
+                inst.run_file.return_value = summary
+                MockRunner.from_session.return_value = inst
+                rc = main(
+                    [
+                        "retrieval",
+                        str(gpath),
+                        "--index-manifest-id",
+                        str(mid),
+                        "--json",
+                    ]
+                )
+    assert rc == 0
+    cfg = MockRunner.from_session.call_args[0][1]
+    assert cfg.index_manifest_id == mid
+
+
+def test_retrieval_cli_unknown_manifest_exits_nonzero(
+    fake_settings, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    mid = uuid4()
+    gpath = tmp_path / "g.jsonl"
+    gpath.write_text('{"id":"x","question":"?","expected_terms":["t"]}\n', encoding="utf-8")
+    with patch("app.evaluation.cli.session_scope"):
+        with patch("app.evaluation.cli.get_settings", return_value=fake_settings):
+            with patch(
+                "app.evaluation.cli.RetrievalEvaluationRunner.from_session",
+                side_effect=ManifestNotFoundError(f"No index manifest with id={mid}"),
+            ):
+                rc = main(
+                    [
+                        "retrieval",
+                        str(gpath),
+                        "--index-manifest-id",
+                        str(mid),
+                    ]
+                )
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert str(mid) in err
+    assert "indexing.cli" in err
+
+
 def test_retrieval_cli_metadata_filter(fake_settings, tmp_path: Path) -> None:
     from app.retrieval.models import RetrievalMetadataFilter
 
@@ -135,3 +189,63 @@ def test_retrieval_cli_metadata_filter(fake_settings, tmp_path: Path) -> None:
     assert rc == 0
     cfg = MockRunner.from_session.call_args[0][1]
     assert cfg.metadata_filter == RetrievalMetadataFilter(jurisdiction="eu")
+
+
+def test_retrieval_cli_failed_case_exits_nonzero(
+    fake_settings, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    item = RetrievalEvaluationItem(
+        question_id="q_fail",
+        question="?",
+        mode="hybrid",
+        top_k=5,
+        hit=False,
+        hit_rank=None,
+        reciprocal_rank=0.0,
+        matched_by=(),
+        retrieved_chunk_ids=(),
+        retrieved_document_ids=(),
+        retrieved_source_paths=(),
+        retrieved_scores=(),
+        error=None,
+    )
+    summary = RetrievalEvaluationSummary(
+        schema_version="evaluation.retrieval.v1",
+        created_at=datetime(2026, 5, 4, tzinfo=UTC),
+        config={"mode": "hybrid", "top_k": 5},
+        manifest={"id": str(uuid4())},
+        total_questions=1,
+        answered_questions=1,
+        errored_questions=0,
+        hit_rate=0.0,
+        mrr=0.0,
+        items=(item,),
+        execution_status="EXECUTED_WITH_FAILED_CASE",
+    )
+    gpath = tmp_path / "g.jsonl"
+    gpath.write_text(
+        '{"id":"q_fail","question":"?","expected_terms":["missing"]}\n',
+        encoding="utf-8",
+    )
+    inst = MagicMock()
+    inst.run_file.return_value = summary
+    with patch("app.evaluation.cli.session_scope"):
+        with patch("app.evaluation.cli.get_settings", return_value=fake_settings):
+            with patch(
+                "app.evaluation.cli.RetrievalEvaluationRunner.from_session",
+                return_value=inst,
+            ):
+                rc = main(["retrieval", str(gpath), "--json"])
+    assert rc == 1
+    out = json.loads(capsys.readouterr().out)
+    assert out["summary"]["execution_status"] == "EXECUTED_WITH_FAILED_CASE"
+    assert out["summary"]["execution_status"] != "PASSED"
+
+    with patch("app.evaluation.cli.session_scope"):
+        with patch("app.evaluation.cli.get_settings", return_value=fake_settings):
+            with patch(
+                "app.evaluation.cli.RetrievalEvaluationRunner.from_session",
+                return_value=inst,
+            ):
+                rc_info = main(["retrieval", str(gpath), "--json", "--no-gate"])
+    assert rc_info == 0
