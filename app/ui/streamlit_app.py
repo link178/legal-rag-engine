@@ -8,7 +8,21 @@ from typing import Any
 import streamlit as st
 
 from app.ui.api_client import ApiError, LegalRagApiClient
-from app.ui.state import SessionKeys, init_state
+from app.ui.state import (
+    DOC_WIDGET_KEY,
+    MANIFEST_WIDGET_KEY,
+    SessionKeys,
+    apply_pending_pins,
+    consume_flash_message,
+    ensure_pin_widgets_initialized,
+    init_state,
+    queue_document_pin,
+    queue_manifest_pin,
+    set_flash_message,
+    sync_document_pin_from_widget,
+    sync_manifest_pin_from_widget,
+    sync_pins_from_widgets,
+)
 
 RETRIEVAL_MODES: tuple[str, ...] = ("hybrid", "dense_only", "sparse_only")
 CHUNK_STRATEGIES: tuple[str, ...] = ("fixed_size", "structure_aware")
@@ -85,6 +99,20 @@ def _show_raw_response(title: str, data: dict[str, Any] | None) -> None:
 def run() -> None:
     st.set_page_config(page_title="legal-rag-engine demo", layout="wide")
     init_state(st)
+    apply_pending_pins(st.session_state)
+    ensure_pin_widgets_initialized(st.session_state)
+
+    flash_msg, flash_level = consume_flash_message(st.session_state)
+    if flash_msg:
+        if flash_level == "success":
+            st.success(flash_msg)
+        elif flash_level == "info":
+            st.info(flash_msg)
+        elif flash_level == "warning":
+            st.warning(flash_msg)
+        else:
+            st.error(flash_msg)
+
     st.title("legal-rag-engine demo")
     st.caption("HTTP-only demo over `/v1`; no direct engine imports.")
 
@@ -119,21 +147,17 @@ def run() -> None:
         st.subheader("Pinned IDs")
         st.text_input(
             "document_id",
-            value=st.session_state[SessionKeys.selected_document_id],
-            key="inp_doc_pin",
+            key=DOC_WIDGET_KEY,
+            on_change=sync_document_pin_from_widget,
+            args=(st.session_state,),
         )
-        st.session_state[SessionKeys.selected_document_id] = str(
-            st.session_state.get("inp_doc_pin", "")
-        ).strip()
-
         st.text_input(
             "manifest_id (retrieve/answer)",
-            value=st.session_state[SessionKeys.selected_manifest_id],
-            key="inp_manifest_pin",
+            key=MANIFEST_WIDGET_KEY,
+            on_change=sync_manifest_pin_from_widget,
+            args=(st.session_state,),
         )
-        st.session_state[SessionKeys.selected_manifest_id] = str(
-            st.session_state.get("inp_manifest_pin", "")
-        ).strip()
+        sync_pins_from_widgets(st.session_state)
 
         # Embedding read-back from last index/retrieve
         last_ix = st.session_state.get(SessionKeys.last_index)
@@ -186,8 +210,7 @@ def run() -> None:
                     format_func=lambda i: labels[i],
                 )
                 if st.button("Use selected as pinned document_id", key="btn_pin_doc"):
-                    st.session_state[SessionKeys.selected_document_id] = ids[choice]
-                    st.session_state["inp_doc_pin"] = ids[choice]
+                    queue_document_pin(st.session_state, ids[choice])
                     st.rerun()
             raw_docs = docs_data if isinstance(docs_data, dict) else None
             _show_raw_response("Raw API response (documents list)", raw_docs)
@@ -206,9 +229,9 @@ def run() -> None:
                     st.session_state[SessionKeys.last_ingest] = data
                     did = data.get("document_id")
                     if did:
-                        st.session_state[SessionKeys.selected_document_id] = str(did)
-                        st.session_state["inp_doc_pin"] = str(did)
-                    st.success("Ingest completed")
+                        queue_document_pin(st.session_state, str(did))
+                    set_flash_message(st.session_state, "Ingest completed")
+                    st.rerun()
                 except ApiError as e:
                     render_api_error(e)
             last_ing = st.session_state.get(SessionKeys.last_ingest)
@@ -355,12 +378,16 @@ def run() -> None:
                     st.session_state[SessionKeys.last_index] = data
                     mid = data.get("manifest_id")
                     if mid:
-                        st.session_state[SessionKeys.selected_manifest_id] = str(mid)
-                        st.session_state["inp_manifest_pin"] = str(mid)
+                        queue_manifest_pin(st.session_state, str(mid))
                     if data.get("skipped_existing"):
-                        st.info("Index skipped (existing manifest). Inspect manifest_id below.")
+                        set_flash_message(
+                            st.session_state,
+                            "Index skipped (existing manifest). Inspect manifest_id below.",
+                            level="info",
+                        )
                     else:
-                        st.success("Indexing completed")
+                        set_flash_message(st.session_state, "Indexing completed")
+                    st.rerun()
                 except ApiError as e:
                     render_api_error(e)
 
@@ -406,8 +433,7 @@ def run() -> None:
                 )
                 mid_s = str(m.get("manifest_id", ""))
                 if cols[1].button("Pin", key=f"pin_{mid_s}"):
-                    st.session_state[SessionKeys.selected_manifest_id] = mid_s
-                    st.session_state["inp_manifest_pin"] = mid_s
+                    queue_manifest_pin(st.session_state, mid_s)
                     st.rerun()
         ml_raw = ml_data if isinstance(ml_data, dict) else None
         _show_raw_response("Raw API response (manifests list)", ml_raw)

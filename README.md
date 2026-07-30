@@ -276,15 +276,20 @@ streamlit run app/ui/streamlit_app.py
 
 The demo exercises `/health`, ingestion, chunking, indexing, retrieval (optional **metadata filter**), and `/v1/answer` with **`mock`**. Details: [docs/implementation/demo-notes.md](docs/implementation/demo-notes.md).
 
-### Demo screenshot (TODO)
+### Streamlit demo
 
-A committed sanitized screenshot is not yet in-repo. Capture one later with deterministic local data (no secrets, no absolute personal paths in the frame):
+The Streamlit client exercises the FastAPI pipeline end to end using an
+explicitly pinned index manifest. This example performs hybrid retrieval,
+returns a grounded deterministic answer, and mechanically verifies all used
+citation identifiers.
 
-1. `docker compose up -d postgres && alembic upgrade head`
-2. `python -m uvicorn app.main:app --host 127.0.0.1 --port 8000`
-3. `streamlit run app/ui/streamlit_app.py`
-4. Ingest `data/sample_corpus/basic/intro.md`, chunk + index with `fixed_size`, ask: `What does the basic intro file describe?` with provider `mock`.
-5. Save a clean viewport PNG to `docs/assets/demo-streamlit.png` and embed it here with alt text: `Streamlit demo showing a grounded mock answer with citations`.
+![Streamlit demo showing a grounded hybrid answer](docs/assets/demo-answer-overview.png)
+
+The verification output distinguishes used, available, valid, invalid,
+duplicate, and unused citation identifiers. In this execution, all three used
+citations were valid and no invalid citations were produced.
+
+![Mechanical citation verification with a 1.0 validity rate](docs/assets/demo-citation-verification.png)
 
 ## Reproducible evaluation
 
