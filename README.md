@@ -113,12 +113,13 @@ Document sources → loaders / parsers → normalizer
 
 ## Evaluation snapshot
 
-Evidence from the latest local validation session (CI DB isolation + explicit smoke manifest; base commit `96d4c8e`). Full command log and historical baselines: [docs/evaluation-snapshot.md](docs/evaluation-snapshot.md).
+Regression evidence for the committed baseline on branch **`develop`**: evaluation execution gates, CI database isolation, explicit-manifest smoke/eval, content-stable ranking tie-breaks, Streamlit pin lifecycle fix, and README demo screenshots. GitHub Actions **ci** workflow (three parallel jobs) is **green** on the latest `develop` push; default pytest and reliability gates match the figures below. Full command log, CI run link, and historical baselines: [docs/evaluation-snapshot.md](docs/evaluation-snapshot.md).
 
 | Check | Result |
 |-------|--------|
-| Default pytest (`python -m pytest -q`, no DB opt-in) | **413 passed**, **14 skipped** |
-| Full DB-backed pytest (integration-only DB, `LEGAL_RAG_RUN_INTEGRATION_DB=1`) | **426 passed**, **1 skipped** (Windows symlink test) |
+| Default pytest (`python -m pytest -q`, no DB opt-in) | **422 passed**, **14 skipped** |
+| Full DB-backed pytest (CI `integration-tests` on Ubuntu) | **436 passed**, **0 skipped** |
+| Full DB-backed pytest (Windows local, integration DB) | **435 passed**, **1 skipped** (symlink privilege test) |
 | Ruff (`python -m ruff check .`) | **passed** |
 | Mypy (`python -m mypy` / `python -m mypy app`) | **passed** — validates the configured production package scope (`app`) |
 | Smoke pipeline (`scripts/smoke_pipeline.py --manifest-out …`) | **passed** (exit 0); 7 documents chunked; retrieval and answer `execution_status=PASSED` |
@@ -127,9 +128,9 @@ Evidence from the latest local validation session (CI DB isolation + explicit sm
 
 **CI isolation:** integration pytest and reliability smoke/eval use **separate databases**. Metrics are produced only from the smoke-created manifest (`--manifest-out` → `--index-manifest-id`). Integration-test artifacts cannot affect evaluation metrics.
 
-**Pre-fix baseline** (same commit before reliability/isolation work): answer pass_rate **0.667** (2/3) with smoke exit 0 despite a failed golden case. A pre-isolation MRR of **0.7314814814814814** is historical only—not the current reproducible value.
+**Historical baseline** (pre-reliability-gate / pre-isolation): answer pass_rate **0.667** (2/3) with smoke exit 0 despite a failed golden case; MRR **0.7314814814814814** before DB isolation and stable ranking ties—superseded by the reproducible **0.75** baseline above.
 
-These figures use a local Postgres instance after `alembic upgrade head`. They are wiring and regression evidence on the sample corpus—not a large-benchmark claim. Dense embeddings in this baseline are `deterministic_hash`, not semantic models.
+These figures use a migrated Postgres instance after `alembic upgrade head`. They are wiring and regression evidence on the sample corpus—not a large-benchmark claim. Dense embeddings in this baseline are `deterministic_hash`, not semantic models.
 
 ## Main capabilities
 
